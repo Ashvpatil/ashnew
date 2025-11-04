@@ -245,7 +245,7 @@ class GameApp(tk.Tk):
         ttk.Spinbox(settings, from_=10, to=100, increment=5, textvariable=self.playout_var, command=self.apply_settings).pack(anchor="w", padx=4, pady=2)
         ttk.Label(settings, text="c_puct").pack(anchor="w", padx=4, pady=2)
         ttk.Spinbox(settings, from_=0.5, to=3.0, increment=0.1, textvariable=self.cpuct_var, command=self.apply_settings).pack(anchor="w", padx=4, pady=2)
-        ttk.Button(settings, text="Apply", command=self.apply_settings).pack(anchor="ew", padx=4, pady=4)
+        ttk.Button(settings, text="Apply", command=self.apply_settings).pack(fill=tk.X, padx=4, pady=4)
 
         self.status_bar = ttk.Label(self, textvariable=self.status_text, relief=tk.SUNKEN, anchor="w")
         self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
