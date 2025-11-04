@@ -1,0 +1,16 @@
+{
+  "name": "Mutual cycles",
+  "description": "Both graphs are identical 3-cycles.",
+  "graph_a": {
+    "a0": ["a1"],
+    "a1": ["a2"],
+    "a2": ["a0"]
+  },
+  "graph_b": {
+    "b0": ["b1"],
+    "b1": ["b2"],
+    "b2": ["b0"]
+  },
+  "start": ["a0", "b0"],
+  "expected": "duplicator"
+}
