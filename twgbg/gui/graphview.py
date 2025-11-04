@@ -6,8 +6,15 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import QEasingCurve, QPointF, QPropertyAnimation, Qt
-from PySide6.QtGui import QBrush, QColor, QPen
-from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsItem, QGraphicsPathItem, QGraphicsScene, QGraphicsSimpleTextItem, QGraphicsView
+from PySide6.QtGui import QBrush, QColor, QPainter, QPen
+from PySide6.QtWidgets import (
+    QGraphicsEllipseItem,
+    QGraphicsItem,
+    QGraphicsPathItem,
+    QGraphicsScene,
+    QGraphicsSimpleTextItem,
+    QGraphicsView,
+)
 
 from ..engine.graphs import DiGraph
 from ..engine.game import Move
@@ -125,7 +132,9 @@ class GraphScene(QGraphicsScene):
 class GraphView(QGraphicsView):
     def __init__(self, graph: DiGraph, parent=None) -> None:
         super().__init__(parent)
-        self.setRenderHints(self.renderHints() | Qt.Antialiasing | Qt.SmoothPixmapTransform)
+        self.setRenderHints(
+            self.renderHints() | QPainter.Antialiasing | QPainter.SmoothPixmapTransform
+        )
         self.scene = GraphScene(graph)
         self.setScene(self.scene)
         self.setDragMode(QGraphicsView.ScrollHandDrag)
