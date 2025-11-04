@@ -27,12 +27,21 @@ pyinstaller pyinstaller.spec
 
 - Space – request AI Spoiler move
 - H – highlight current legal replies
-- P – toggle principal variation overlay
 - M – toggle MCTS heatmap overlay
 - R – replay current game
 - Ctrl+S / Ctrl+O – save/load sessions
 - Ctrl+Z / Ctrl+Y – undo/redo
 - Shift+H – high-contrast theme
+- P – toggle principal variation overlay
+- Toggle colorblind-safe palette from the overlays panel
+
+## Highlights
+
+- Three Spoiler engines: alpha-beta with heuristics, MCTS, and a hybrid controller.
+- Always-on hint panel with animated halos in both graph views.
+- Coach commentary, alternatives, and bisimulation diagnostics in the Analysis tab.
+- Guided onboarding tutorial for newcomers and in-app experiment runner.
+- Rule variants: mirror mode, jump cooldowns/limits, forced sides, and round limits.
 
 ## Switching UI Stack
 

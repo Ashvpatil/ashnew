@@ -1,9 +1,8 @@
-"""Monte-Carlo Tree Search for the Spoiler AI."""
+"""Monte Carlo Tree Search Spoiler AI."""
 from __future__ import annotations
 
 import math
 import random
-import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -13,9 +12,10 @@ from ..graphs import DiGraph
 
 @dataclass
 class MCTSConfig:
-    iterations: int = 500
-    rollout_depth: int = 8
-    exploration_constant: float = math.sqrt(2.0)
+    rollouts: int = 800
+    playout_depth: int = 10
+    c_puct: float = math.sqrt(2.0)
+    bias: float = 0.15
     seed: Optional[int] = None
 
 
@@ -26,14 +26,19 @@ class Node:
     move: Optional[Move]
     visits: int = 0
     value: float = 0.0
-    children: Dict[Move, "Node"] = field(default_factory=dict)
-    untried_moves: List[Move] = field(default_factory=list)
+    children: Dict[str, "Node"] = field(default_factory=dict)
+    untried: List[Move] = field(default_factory=list)
+    terminal: bool = False
 
-    def uct_score(self, c: float) -> float:
-        if self.visits == 0:
-            return math.inf
-        assert self.parent is not None
-        return self.value / self.visits + c * math.sqrt(math.log(self.parent.visits + 1) / self.visits)
+    def key_for(self, move: Move) -> str:
+        return f"{move.graph}:{move.move_type}:{move.source}->{move.target}"
+
+
+@dataclass
+class MCTSResult:
+    best_move: Move
+    principal_variation: List[Move]
+    visit_heat: Dict[str, Dict[str, int]]
 
 
 class MCTSSpoiler:
@@ -42,6 +47,7 @@ class MCTSSpoiler:
         graph_a: DiGraph,
         graph_b: DiGraph,
         rules: RuleSet,
+        *,
         config: Optional[MCTSConfig] = None,
     ) -> None:
         self.graph_a = graph_a
@@ -49,67 +55,158 @@ class MCTSSpoiler:
         self.rules = rules
         self.config = config or MCTSConfig()
         self.rng = random.Random(self.config.seed)
-        self.visit_heat: Dict[Tuple[str, str], int] = {}
+        self.visit_heat: Dict[str, Dict[str, int]] = {"A": {}, "B": {}}
 
-    def _rollout_policy(self, pos: Position) -> float:
-        value = 0.0
-        for depth in range(self.config.rollout_depth):
-            moves = spoiler_legal_moves(self.graph_a, self.graph_b, pos, self.rules)
-            if not moves:
-                return -1.0
-            move = min(
-                moves,
-                key=lambda mv: len(legal_responses(self.graph_a, self.graph_b, pos, mv, self.rules)) + self.rng.random() * 0.1,
-            )
-            responses = legal_responses(self.graph_a, self.graph_b, pos, move, self.rules)
-            if not responses:
-                return 1.0
-            reply = self.rng.choice(responses)
-            pos = step(self.graph_a, self.graph_b, pos, move, reply)
-            value += 1.0 / (1 + len(responses))
-        return value / max(1, self.config.rollout_depth)
+    # ------------------------------------------------------------------
+    def run(self, root_position: Position) -> MCTSResult:
+        root = Node(
+            position=root_position,
+            parent=None,
+            move=None,
+            untried=spoiler_legal_moves(self.graph_a, self.graph_b, root_position, self.rules),
+        )
+        for _ in range(self.config.rollouts):
+            node = self._select(root)
+            child = self._expand(node)
+            reward = self._rollout(child)
+            self._backpropagate(child, reward)
 
-    def select(self, node: Node) -> Node:
+        if not root.children:
+            raise RuntimeError("Spoiler has no legal moves")
+
+        best_child = max(root.children.values(), key=lambda n: n.visits)
+        self._build_heatmap(root)
+        pv = self._extract_pv(best_child)
+        return MCTSResult(best_child.move, pv, self.visit_heat)
+
+    # ------------------------------------------------------------------
+    def _select(self, node: Node) -> Node:
         current = node
-        while current.untried_moves == [] and current.children:
-            current = max(current.children.values(), key=lambda child: child.uct_score(self.config.exploration_constant))
+        while current.untried == [] and current.children:
+            current = max(
+                current.children.values(),
+                key=lambda child: self._puct(current, child),
+            )
         return current
 
-    def expand(self, node: Node) -> Node:
-        if not node.untried_moves:
+    def _expand(self, node: Node) -> Node:
+        if node.terminal:
             return node
-        move = node.untried_moves.pop()
-        responses = legal_responses(self.graph_a, self.graph_b, node.position, move, self.rules)
-        if not responses:
-            child_pos = node.position  # Spoiler wins immediately
+        if node.untried:
+            move = node.untried.pop()
         else:
-            reply = self.rng.choice(responses)
-            child_pos = step(self.graph_a, self.graph_b, node.position, move, reply)
-        child = Node(position=child_pos, parent=node, move=move)
-        child.untried_moves = spoiler_legal_moves(self.graph_a, self.graph_b, child_pos, self.rules)
-        node.children[move] = child
+            return node
+        replies = legal_responses(self.graph_a, self.graph_b, node.position, move, self.rules)
+        if not replies:
+            # Spoiler wins immediately
+            child_position, alive, info = step(
+                self.graph_a, self.graph_b, node.position, move, None, self.rules
+            )
+            child = Node(position=child_position, parent=node, move=move, terminal=True)
+            node.children[node.key_for(move)] = child
+            return child
+        reply = self._choose_reply(node.position, move, replies)
+        child_position, alive, info = step(
+            self.graph_a, self.graph_b, node.position, move, reply, self.rules
+        )
+        terminal = not alive
+        child = Node(
+            position=child_position,
+            parent=node,
+            move=move,
+            terminal=terminal,
+            untried=[] if terminal else spoiler_legal_moves(
+                self.graph_a, self.graph_b, child_position, self.rules
+            ),
+        )
+        node.children[node.key_for(move)] = child
         return child
 
-    def backpropagate(self, node: Node, result: float) -> None:
-        current = node
+    def _rollout(self, node: Node) -> float:
+        position = node.position
+        total = 0.0
+        depth = 0
+        alive = not node.terminal
+        while depth < self.config.playout_depth and alive:
+            moves = spoiler_legal_moves(self.graph_a, self.graph_b, position, self.rules)
+            if not moves:
+                return 0.0
+            move = self._bias_move(position, moves)
+            replies = legal_responses(self.graph_a, self.graph_b, position, move, self.rules)
+            if not replies:
+                return 1.0
+            reply = self._choose_reply(position, move, replies)
+            position, alive, info = step(
+                self.graph_a, self.graph_b, position, move, reply, self.rules
+            )
+            if not alive:
+                return 1.0 if info.get("spoiler_wins") else 0.0
+            total += 1.0 / (1 + len(replies))
+            depth += 1
+        return total / max(1, depth)
+
+    def _backpropagate(self, node: Node, reward: float) -> None:
+        current: Optional[Node] = node
         while current is not None:
             current.visits += 1
-            current.value += result
+            current.value += reward
+            reward = 1.0 - reward  # alternate perspective for Duplicator
             current = current.parent
 
-    def run(self, root_position: Position) -> Move:
-        root = Node(position=root_position, parent=None, move=None)
-        root.untried_moves = spoiler_legal_moves(self.graph_a, self.graph_b, root_position, self.rules)
-        for _ in range(self.config.iterations):
-            node = self.select(root)
-            node = self.expand(node)
-            result = self._rollout_policy(node.position)
-            self.backpropagate(node, result)
-        if not root.children:
-            raise ValueError("No legal moves for Spoiler")
-        best_child = max(root.children.values(), key=lambda child: child.visits)
-        self.visit_heat = {
-            (child.position.vertex_a, child.position.vertex_b): child.visits
-            for child in root.children.values()
-        }
-        return best_child.move  # type: ignore[return-value]
+    def _puct(self, parent: Node, child: Node) -> float:
+        if child.visits == 0:
+            return math.inf
+        q = child.value / child.visits
+        prior = 1.0 / (1 + self._reply_pressure(parent.position, child.move))
+        exploration = self.config.c_puct * prior * math.sqrt(parent.visits) / (1 + child.visits)
+        return q + exploration
+
+    def _reply_pressure(self, position: Position, move: Move) -> int:
+        replies = legal_responses(self.graph_a, self.graph_b, position, move, self.rules)
+        return len(replies)
+
+    def _choose_reply(self, position: Position, move: Move, replies: List[Move]) -> Move:
+        if len(replies) == 1:
+            return replies[0]
+        scores: List[Tuple[float, Move]] = []
+        for reply in replies:
+            graph = self.graph_a if reply.graph == "A" else self.graph_b
+            indeg, outdeg = graph.degree(reply.target)
+            score = indeg + outdeg + self.config.bias * self.rng.random()
+            scores.append((score, reply))
+        scores.sort(key=lambda item: item[0], reverse=True)
+        # higher degree replies are safer for Duplicator; Spoiler prefers the opposite
+        pick_index = int(self.rng.random() * min(3, len(scores)))
+        return scores[-(pick_index + 1)][1]
+
+    def _bias_move(self, position: Position, moves: List[Move]) -> Move:
+        scored = []
+        for move in moves:
+            replies = legal_responses(self.graph_a, self.graph_b, position, move, self.rules)
+            score = len(replies) + self.config.bias * self.rng.random()
+            scored.append((score, move))
+        scored.sort(key=lambda item: item[0])
+        return scored[0][1]
+
+    def _build_heatmap(self, root: Node) -> None:
+        heat_a: Dict[str, int] = {}
+        heat_b: Dict[str, int] = {}
+        for child in root.children.values():
+            move = child.move
+            if move is None:
+                continue
+            if move.graph == "A":
+                heat_a[move.target] = heat_a.get(move.target, 0) + child.visits
+            else:
+                heat_b[move.target] = heat_b.get(move.target, 0) + child.visits
+        self.visit_heat = {"A": heat_a, "B": heat_b}
+
+    def _extract_pv(self, node: Node) -> List[Move]:
+        sequence: List[Move] = []
+        current = node
+        while current.move is not None:
+            sequence.append(current.move)
+            if not current.children:
+                break
+            current = max(current.children.values(), key=lambda child: child.visits)
+        return sequence

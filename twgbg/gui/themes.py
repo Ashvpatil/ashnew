@@ -48,6 +48,20 @@ HIGH_CONTRAST_PALETTE = Palette(
 )
 
 
+COLORBLIND_SAFE_PALETTE = Palette(
+    background=QColor("#1B1F23"),
+    surface=QColor("#24292E"),
+    surface_alt=QColor("#2D333B"),
+    accent=QColor("#539BF5"),
+    accent_alt=QColor("#F9826C"),
+    text=QColor("#F6F8FA"),
+    text_muted=QColor("#C5D1DE"),
+    success=QColor("#57AB5A"),
+    warning=QColor("#D29922"),
+    danger=QColor("#E5534B"),
+)
+
+
 FONTS: Dict[str, QFont] = {
     "title": QFont("Fira Sans", 22, QFont.Bold),
     "subtitle": QFont("Fira Sans", 16),

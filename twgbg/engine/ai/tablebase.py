@@ -37,7 +37,20 @@ class Tablebase:
                 if not responses:
                     self.record(pos, True)
                     return True
-                if all(dfs(step(graph_a, graph_b, pos, move, reply), depth - 1) for reply in responses):
+                spoiler_wins = True
+                for reply in responses:
+                    child_pos, alive, info = step(
+                        graph_a, graph_b, pos, move, reply, rules
+                    )
+                    if not alive:
+                        if not info.get("spoiler_wins"):
+                            spoiler_wins = False
+                            break
+                        continue
+                    if not dfs(child_pos, depth - 1):
+                        spoiler_wins = False
+                        break
+                if spoiler_wins:
                     self.record(pos, True)
                     return True
             self.record(pos, False)

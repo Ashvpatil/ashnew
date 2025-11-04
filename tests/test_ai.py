@@ -12,13 +12,23 @@ def make_graphs():
 
 def test_alphabeta_smoke():
     graph_a, graph_b = make_graphs()
-    spoiler = AlphaBetaSpoiler(graph_a, graph_b, RuleSet(), config=SearchConfig(depth=2, iterative_deepening=False))
+    spoiler = AlphaBetaSpoiler(
+        graph_a,
+        graph_b,
+        RuleSet(),
+        config=SearchConfig(depth=2, iterative_deepening=False, time_budget_ms=500),
+    )
     result = spoiler.search(Position("0", "0"))
     assert result.best_move is not None
 
 
 def test_mcts_smoke():
     graph_a, graph_b = make_graphs()
-    spoiler = MCTSSpoiler(graph_a, graph_b, RuleSet(), config=MCTSConfig(iterations=50, rollout_depth=3, seed=1))
-    move = spoiler.run(Position("0", "0"))
-    assert move is not None
+    spoiler = MCTSSpoiler(
+        graph_a,
+        graph_b,
+        RuleSet(),
+        config=MCTSConfig(rollouts=30, playout_depth=3, seed=1),
+    )
+    result = spoiler.run(Position("0", "0"))
+    assert result.best_move is not None

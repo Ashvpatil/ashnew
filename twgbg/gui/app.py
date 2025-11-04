@@ -1,4 +1,4 @@
-"""Main Qt application for the Two-Way Global Bisimulation Game."""
+"""Main PySide6 application entry point."""
 from __future__ import annotations
 
 import json
@@ -8,39 +8,37 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal
-from PySide6.QtGui import QAction, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
-    QComboBox,
     QFileDialog,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QSpinBox,
     QSplitter,
     QStatusBar,
     QTabWidget,
     QTextEdit,
+    QToolBar,
     QVBoxLayout,
     QWidget,
 )
 
-from ..analysis import bisim
+from ..analysis import signature_partition
 from ..analysis.witness import export_witness_trace
-from ..engine.ai.alphabeta import AlphaBetaSpoiler, SearchConfig
-from ..engine.ai.mcts import MCTSSpoiler, MCTSConfig
-from ..engine.ai.tablebase import Tablebase
+from ..engine.ai import AlphaBetaSpoiler, HybridSpoiler, MCTSSpoiler, MCTSConfig, SearchConfig, Tablebase
+from ..engine.ai.hybrid import HybridConfig
+from ..engine.ai.mcts import MCTSResult
 from ..engine.game import Move, Position, RuleSet, legal_responses, spoiler_legal_moves, step
 from ..engine.graphs import DiGraph, load_graph_pair
+from .exporter import export_scene_png, export_scene_svg
 from .graphview import GraphView
-from .themes import DARK_PALETTE, HIGH_CONTRAST_PALETTE
+from .panels import AISettingsPanel, HintPanel, OverlayPanel, RulePanel
+from .tutorial import TutorialWidget
 
 
 @dataclass
@@ -48,293 +46,345 @@ class GameState:
     graph_a: DiGraph
     graph_b: DiGraph
     position: Position
+    rules: RuleSet
     history: List[Move] = field(default_factory=list)
-    reply_history: List[Move] = field(default_factory=list)
-    position_stack: List[Position] = field(default_factory=list)
+    replies: List[Move] = field(default_factory=list)
+    stack: List[Position] = field(default_factory=list)
     redo_stack: List[Position] = field(default_factory=list)
 
     def push(self, position: Position) -> None:
-        self.position_stack.append(position)
+        self.stack.append(position)
         self.position = position
         self.redo_stack.clear()
 
     def undo(self) -> Optional[Position]:
-        if len(self.position_stack) <= 1:
+        if len(self.stack) <= 1:
             return None
-        self.redo_stack.append(self.position_stack.pop())
-        self.position = self.position_stack[-1]
-        if self.reply_history:
-            self.reply_history.pop()
+        self.redo_stack.append(self.stack.pop())
+        self.position = self.stack[-1]
         if self.history:
             self.history.pop()
+        if self.replies:
+            self.replies.pop()
         return self.position
 
     def redo(self) -> Optional[Position]:
         if not self.redo_stack:
             return None
-        pos = self.redo_stack.pop()
-        self.position_stack.append(pos)
-        self.position = pos
-        # redo does not recover move history for simplicity
-        return pos
+        position = self.redo_stack.pop()
+        self.stack.append(position)
+        self.position = position
+        return position
 
 
 class SpoilerWorker(QObject):
-    finished = Signal(Move, list, dict)
+    finished = Signal(dict)
     failed = Signal(str)
 
-    def __init__(self, ai_type: str, state: GameState, rules: RuleSet, depth: int, iters: int) -> None:
+    def __init__(
+        self,
+        engine: str,
+        state: GameState,
+        ai_settings: dict,
+        tablebase: Tablebase,
+    ) -> None:
         super().__init__()
-        self.ai_type = ai_type
+        self.engine = engine
         self.state = state
-        self.rules = rules
-        self.depth = depth
-        self.iters = iters
+        self.ai_settings = ai_settings
+        self.tablebase = tablebase
 
     def run(self) -> None:
         try:
-            if self.ai_type == "Alpha-Beta":
-                spoiler = AlphaBetaSpoiler(self.state.graph_a, self.state.graph_b, self.rules, config=SearchConfig(depth=self.depth))
-                result = spoiler.search(self.state.position)
+            position = self.state.position
+            rules = self.state.rules
+            if self.engine == "Alpha-Beta":
+                config = SearchConfig(
+                    depth=self.ai_settings["depth"],
+                    time_budget_ms=self.ai_settings["iter_ms"],
+                    iterative_deepening=True,
+                )
+                spoiler = AlphaBetaSpoiler(
+                    self.state.graph_a,
+                    self.state.graph_b,
+                    rules,
+                    tablebase=self.tablebase,
+                    config=config,
+                )
+                result = spoiler.search(position)
                 if result.best_move is None:
-                    raise RuntimeError("No move found")
-                pv_vertices = [result.best_move.target]
-                heat_map = {"A": {}, "B": {}}
-                self.finished.emit(result.best_move, pv_vertices, heat_map)
+                    raise RuntimeError("Spoiler found no legal move")
+                pv_vertices = [mv.target for mv in result.principal_variation if mv]
+                data = {
+                    "move": result.best_move,
+                    "pv": pv_vertices,
+                    "heat": {"A": {}, "B": {}},
+                    "value": result.value,
+                }
+            elif self.engine == "MCTS":
+                config = MCTSConfig(
+                    rollouts=self.ai_settings["rollouts"],
+                    playout_depth=self.ai_settings["playout"],
+                    c_puct=self.ai_settings["c_puct"],
+                )
+                spoiler = MCTSSpoiler(self.state.graph_a, self.state.graph_b, rules, config=config)
+                mcts_result: MCTSResult = spoiler.run(position)
+                data = {
+                    "move": mcts_result.best_move,
+                    "pv": [mv.target for mv in mcts_result.principal_variation],
+                    "heat": mcts_result.visit_heat,
+                    "value": 0.0,
+                }
             else:
-                spoiler = MCTSSpoiler(self.state.graph_a, self.state.graph_b, self.rules, config=MCTSConfig(iterations=self.iters))
-                move = spoiler.run(self.state.position)
-                heat_map = {"A": {}, "B": {}}
-                for (va, vb), count in spoiler.visit_heat.items():
-                    heat_map["A"][va] = heat_map["A"].get(va, 0) + count
-                    heat_map["B"][vb] = heat_map["B"].get(vb, 0) + count
-                self.finished.emit(move, [], heat_map)
-        except Exception as exc:  # pragma: no cover
+                config = HybridConfig(
+                    alphabeta_depth=self.ai_settings["depth"],
+                    alphabeta_time_ms=self.ai_settings["iter_ms"],
+                    mcts_rollouts=self.ai_settings["rollouts"],
+                    mcts_playout_depth=self.ai_settings["playout"],
+                    c_puct=self.ai_settings["c_puct"],
+                )
+                spoiler = HybridSpoiler(self.state.graph_a, self.state.graph_b, rules, config=config)
+                result = spoiler.choose(position)
+                data = {
+                    "move": result.best_move,
+                    "pv": [mv.target for mv in result.pv],
+                    "heat": result.heat,
+                    "value": result.value,
+                }
+            alternatives = self._alternatives(position, rules)
+            data["alternatives"] = alternatives
+            self.finished.emit(data)
+        except Exception as exc:  # pragma: no cover - defensive
             self.failed.emit(str(exc))
+
+    def _alternatives(self, position: Position, rules: RuleSet) -> List[str]:
+        lines: List[str] = []
+        moves = spoiler_legal_moves(self.state.graph_a, self.state.graph_b, position, rules)
+        scored = []
+        for move in moves:
+            replies = legal_responses(self.state.graph_a, self.state.graph_b, position, move, rules)
+            scored.append((len(replies), move))
+        scored.sort(key=lambda item: item[0])
+        for count, move in scored[:5]:
+            lines.append(f"{move.move_type} on {move.graph}: {count} replies")
+        return lines
 
 
 class PlayTab(QWidget):
     spoiler_move = Signal(Move)
     duplicator_move = Signal(Move)
+    commentary_ready = Signal(str, List[str])
 
-    def __init__(self, state: GameState, rules: RuleSet, parent=None) -> None:
+    def __init__(self, state: GameState, parent=None) -> None:
         super().__init__(parent)
         self.state = state
-        self.rules = rules
-        self.current_hints: List[Move] = []
-        self.ai_type = "Alpha-Beta"
-        self.depth = 3
-        self.iters = 400
         self.tablebase = Tablebase()
-        self.tablebase.build(state.graph_a, state.graph_b, rules, max_depth=3)
+        self.tablebase.build(state.graph_a, state.graph_b, state.rules, max_depth=3)
         self.thread: Optional[QThread] = None
-        self.pv_enabled = True
-        self.heat_enabled = True
+        self.current_responses: List[Move] = []
         self._build_ui()
-        self.hint_list.itemDoubleClicked.connect(lambda item: self.duplicator_select(self.hint_list.row(item)))
 
     def _build_ui(self) -> None:
         layout = QGridLayout(self)
-        splitter = QSplitter()
+        self.splitter = QSplitter()
         self.view_a = GraphView(self.state.graph_a)
         self.view_b = GraphView(self.state.graph_b)
-        splitter.addWidget(self.view_a)
-        splitter.addWidget(self.view_b)
-        splitter.setSizes([600, 600])
+        self.splitter.addWidget(self.view_a)
+        self.splitter.addWidget(self.view_b)
+        self.splitter.setSizes([600, 600])
+        layout.addWidget(self.splitter, 0, 0)
 
-        layout.addWidget(splitter, 0, 0, 1, 2)
+        sidebar = QVBoxLayout()
+        self.ai_panel = AISettingsPanel()
+        self.rules_panel = RulePanel()
+        self.overlay_panel = OverlayPanel()
+        self.hint_panel = HintPanel()
 
-        control_box = QGroupBox("Spoiler AI")
-        control_layout = QVBoxLayout(control_box)
+        for panel in (self.ai_panel, self.rules_panel, self.overlay_panel, self.hint_panel):
+            box = QGroupBox()
+            box_layout = QVBoxLayout(box)
+            box_layout.addWidget(panel)
+            sidebar.addWidget(box)
 
-        self.ai_combo = QComboBox()
-        self.ai_combo.addItems(["Alpha-Beta", "MCTS"])
-        self.ai_combo.currentTextChanged.connect(self._ai_changed)
-        control_layout.addWidget(QLabel("Engine"))
-        control_layout.addWidget(self.ai_combo)
+        sidebar.addStretch(1)
+        container = QWidget()
+        container.setLayout(sidebar)
+        layout.addWidget(container, 0, 1)
 
-        self.depth_spin = QSpinBox()
-        self.depth_spin.setRange(1, 7)
-        self.depth_spin.setValue(self.depth)
-        self.depth_spin.valueChanged.connect(lambda v: setattr(self, "depth", v))
-        control_layout.addWidget(QLabel("Depth"))
-        control_layout.addWidget(self.depth_spin)
-
-        self.iter_spin = QSpinBox()
-        self.iter_spin.setRange(100, 8000)
-        self.iter_spin.setSingleStep(100)
-        self.iter_spin.setValue(self.iters)
-        self.iter_spin.valueChanged.connect(lambda v: setattr(self, "iters", v))
-        control_layout.addWidget(QLabel("Iterations"))
-        control_layout.addWidget(self.iter_spin)
-
-        toggle_row = QHBoxLayout()
-        self.pv_toggle = QCheckBox("Show PV")
-        self.pv_toggle.setChecked(True)
-        self.pv_toggle.stateChanged.connect(lambda state: setattr(self, "pv_enabled", bool(state)))
-        self.heat_toggle = QCheckBox("Heatmap")
-        self.heat_toggle.setChecked(True)
-        self.heat_toggle.stateChanged.connect(lambda state: setattr(self, "heat_enabled", bool(state)))
-        toggle_row.addWidget(self.pv_toggle)
-        toggle_row.addWidget(self.heat_toggle)
-        control_layout.addLayout(toggle_row)
-
-        self.move_button = QPushButton("Spoiler Move [Space]")
+        self.move_button = QPushButton("Spoiler move [Space]")
         self.move_button.clicked.connect(self.request_spoiler_move)
-        control_layout.addWidget(self.move_button)
+        layout.addWidget(self.move_button, 1, 0)
+        self.replay_button = QPushButton("Replay history [R]")
+        layout.addWidget(self.replay_button, 1, 1)
 
-        self.replay_button = QPushButton("Replay [R]")
+        self.rules_panel.rules_changed.connect(self._update_rules)
+        self.overlay_panel.settings_changed.connect(self._update_overlays)
+        self.hint_panel.clear()
+
         self.replay_button.clicked.connect(self.replay)
-        control_layout.addWidget(self.replay_button)
 
-        self.hint_label = QLabel("Legal replies")
-        control_layout.addWidget(self.hint_label)
-        self.hint_list = QListWidget()
-        control_layout.addWidget(self.hint_list)
-        self.hint_list.itemClicked.connect(lambda item: self.duplicator_select(self.hint_list.row(item)))
-
-        layout.addWidget(control_box, 0, 2)
-
-        self.status = QLabel("Ready")
-        layout.addWidget(self.status, 1, 0, 1, 3)
-        
     # ------------------------------------------------------------------
-    def _ai_changed(self, name: str) -> None:
-        self.ai_type = name
+    def reset_graphs(self, graph_a: DiGraph, graph_b: DiGraph) -> None:
+        self.state.graph_a = graph_a
+        self.state.graph_b = graph_b
+        self.splitter.widget(0).deleteLater()
+        self.splitter.widget(0).deleteLater()
+        self.view_a = GraphView(graph_a)
+        self.view_b = GraphView(graph_b)
+        self.splitter.insertWidget(0, self.view_a)
+        self.splitter.insertWidget(1, self.view_b)
+        self.hint_panel.clear()
+        self.current_responses = []
 
     def request_spoiler_move(self) -> None:
         if self.thread and self.thread.isRunning():
             return
-        moves = spoiler_legal_moves(self.state.graph_a, self.state.graph_b, self.state.position, self.rules)
-        if not moves:
-            QMessageBox.information(self, "Spoiler", "Spoiler has no moves. Duplicator survives!")
-            return
-        worker = SpoilerWorker(self.ai_type, self.state, self.rules, self.depth, self.iters)
+        worker = SpoilerWorker(
+            self.ai_panel.current_engine(),
+            self.state,
+            self.ai_panel.current_settings(),
+            self.tablebase,
+        )
         thread = QThread(self)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.finished.connect(self._on_spoiler_move)
+        worker.finished.connect(self._on_worker_done)
         worker.finished.connect(lambda *_: thread.quit())
         worker.finished.connect(worker.deleteLater)
-        worker.failed.connect(lambda msg: QMessageBox.critical(self, "Error", msg))
+        worker.failed.connect(self._on_worker_failed)
         worker.failed.connect(lambda *_: thread.quit())
         worker.failed.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         self.thread = thread
         thread.start()
 
-    def _on_spoiler_move(self, move: Move, pv_vertices: List[str], heat: Dict[str, Dict[str, int]]) -> None:
+    def _on_worker_done(self, payload: dict) -> None:
+        move: Move = payload["move"]
+        responses = legal_responses(self.state.graph_a, self.state.graph_b, self.state.position, move, self.state.rules)
+        self.current_responses = responses
         self.state.history.append(move)
-        self.status.setText(f"Spoiler plays {move}")
-        target_view = self.view_b if move.graph == "A" else self.view_a
-        other_view = self.view_a if move.graph == "A" else self.view_b
-        target_view.animate_move(move)
-        other_view.animate_move(move)
-        responses = legal_responses(self.state.graph_a, self.state.graph_b, self.state.position, move, self.rules)
-        self.current_hints = responses
-        self.hint_list.clear()
-        for reply in responses:
-            item = QListWidgetItem(str(reply))
-            self.hint_list.addItem(item)
+        self.view_a.animate_move(move)
+        self.view_b.animate_move(move)
+        self.view_a.centre_on(self.state.position.vertex_a)
+        self.view_b.centre_on(self.state.position.vertex_b)
+        if self.overlay_panel.overlay_state()["pv"]:
+            target_view = self.view_a if move.graph == "A" else self.view_b
+            target_view.set_pv([move.source] + payload["pv"])
+        if self.overlay_panel.overlay_state()["heat"]:
+            self.view_a.set_heatmap(payload["heat"].get("A", {}))
+            self.view_b.set_heatmap(payload["heat"].get("B", {}))
+        self.hint_panel.update_hints(responses, self.duplicator_select)
         hint_vertices = [reply.target for reply in responses]
-        self.view_a.clear_hints()
-        self.view_b.clear_hints()
+        target_view = self.view_b if move.graph == "A" else self.view_a
         target_view.show_hints(hint_vertices)
-        if self.pv_enabled:
-            path = pv_vertices or hint_vertices
-            target_view.set_pv(path)
-        else:
-            target_view.set_pv([])
-            other_view.set_pv([])
-        if self.heat_enabled:
-            target_view.set_heatmap(heat["A"] if move.graph == "A" else heat["B"])
-        else:
-            target_view.clear_heatmap()
+        other_view = self.view_a if move.graph == "A" else self.view_b
+        other_view.clear_hints()
+        commentary = f"Spoiler plays {move.move_type} on graph {move.graph}, leaving {len(responses)} replies."
+        self.commentary_ready.emit(commentary, payload.get("alternatives", []))
         self.spoiler_move.emit(move)
 
-    def duplicator_select(self, index: int) -> None:
-        if index < 0 or index >= len(self.current_hints):
+    def _on_worker_failed(self, message: str) -> None:
+        QMessageBox.critical(self, "Spoiler AI", message)
+
+    def duplicator_select(self, move: Move) -> None:
+        if move not in self.current_responses:
             return
-        reply = self.current_hints[index]
-        self.state.reply_history.append(reply)
-        new_pos = step(self.state.graph_a, self.state.graph_b, self.state.position, self.state.history[-1], reply)
-        self.state.push(new_pos)
-        self.view_a.centre_on_vertex(self.state.position.vertex_a)
-        self.view_b.centre_on_vertex(self.state.position.vertex_b)
+        self.state.replies.append(move)
+        new_position, alive, info = step(
+            self.state.graph_a,
+            self.state.graph_b,
+            self.state.position,
+            self.state.history[-1],
+            move,
+            self.state.rules,
+        )
+        self.state.push(new_position)
+        self.view_a.centre_on(new_position.vertex_a)
+        self.view_b.centre_on(new_position.vertex_b)
         self.view_a.clear_hints()
         self.view_b.clear_hints()
-        self.hint_list.clear()
-        self.status.setText(f"Duplicator plays {reply}")
-        self.duplicator_move.emit(reply)
+        self.hint_panel.clear()
+        self.duplicator_move.emit(move)
+        if not alive:
+            if info.get("duplicator_survives"):
+                QMessageBox.information(self, "Round limit", "Duplicator survives the set round limit!")
+            else:
+                QMessageBox.information(self, "Spoiler", "Spoiler wins the game.")
 
     def replay(self) -> None:
         if not self.state.history:
             return
-        base_position = self.state.position_stack[0]
-        self.state.position = base_position
-        self.state.position_stack = [base_position]
-        self.view_a.centre_on_vertex(base_position.vertex_a)
-        self.view_b.centre_on_vertex(base_position.vertex_b)
-
-        sequence = list(zip(self.state.history, self.state.reply_history))
-
-        def play_next(index: int = 0) -> None:
-            if index >= len(sequence):
-                return
-            move, reply = sequence[index]
-            self.state.position = step(self.state.graph_a, self.state.graph_b, self.state.position, move, reply)
+        base = self.state.stack[0]
+        self.state.position = base
+        self.view_a.clear_hints()
+        self.view_b.clear_hints()
+        for move, reply in zip(self.state.history, self.state.replies):
             self.view_a.animate_move(move)
             self.view_b.animate_move(move)
-            self.view_a.centre_on_vertex(self.state.position.vertex_a)
-            self.view_b.centre_on_vertex(self.state.position.vertex_b)
-            QTimer.singleShot(600, lambda: play_next(index + 1))
+            self.state.position = step(
+                self.state.graph_a,
+                self.state.graph_b,
+                self.state.position,
+                move,
+                reply,
+                self.state.rules,
+            )[0]
 
-        from PySide6.QtCore import QTimer
+    def _update_rules(self) -> None:
+        settings = self.rules_panel.current_rules()
+        self.state.rules = self.state.rules.with_toggle(**settings)
 
-        play_next(0)
+    def _update_overlays(self) -> None:
+        state = self.overlay_panel.overlay_state()
+        self.view_a.set_high_contrast(state["high_contrast"])
+        self.view_b.set_high_contrast(state["high_contrast"])
+        self.view_a.set_colorblind_safe(state["colorblind"])
+        self.view_b.set_colorblind_safe(state["colorblind"])
 
 
 class AnalysisTab(QWidget):
     def __init__(self, state: GameState, parent=None) -> None:
         super().__init__(parent)
         self.state = state
-        self._build_ui()
-
-    def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        self.explainer = QTextEdit()
-        self.explainer.setReadOnly(True)
+        self.commentary = QTextEdit()
+        self.commentary.setReadOnly(True)
         layout.addWidget(QLabel("Coach commentary"))
-        layout.addWidget(self.explainer)
+        layout.addWidget(self.commentary)
 
-        self.partition_text = QTextEdit()
-        self.partition_text.setReadOnly(True)
+        self.alternative_list = QTextEdit()
+        self.alternative_list.setReadOnly(True)
+        layout.addWidget(QLabel("Top alternatives"))
+        layout.addWidget(self.alternative_list)
+
+        self.partition = QTextEdit()
+        self.partition.setReadOnly(True)
         layout.addWidget(QLabel("Signature partitions"))
-        layout.addWidget(self.partition_text)
+        layout.addWidget(self.partition)
+        self.update_partitions()
 
         self.export_button = QPushButton("Export witness trace")
         self.export_button.clicked.connect(self.export_witness)
         layout.addWidget(self.export_button)
 
-        self.update_partitions()
+    def set_commentary(self, text: str, alternatives: List[str]) -> None:
+        self.commentary.setPlainText(text)
+        self.alternative_list.setPlainText("\n".join(alternatives))
 
     def update_partitions(self) -> None:
-        parts_a = bisim.signature_partition(self.state.graph_a)
-        parts_b = bisim.signature_partition(self.state.graph_b)
+        parts_a = signature_partition(self.state.graph_a)
+        parts_b = signature_partition(self.state.graph_b)
         lines = ["Graph A"]
-        for cls, vertices in parts_a.items():
-            lines.append(f"  Class {cls}: {', '.join(vertices)}")
+        for cluster, vertices in parts_a.items():
+            lines.append(f"  Class {cluster}: {', '.join(vertices)}")
         lines.append("Graph B")
-        for cls, vertices in parts_b.items():
-            lines.append(f"  Class {cls}: {', '.join(vertices)}")
-        self.partition_text.setPlainText("\n".join(lines))
-
-    def set_commentary(self, text: str) -> None:
-        self.explainer.setPlainText(text)
+        for cluster, vertices in parts_b.items():
+            lines.append(f"  Class {cluster}: {', '.join(vertices)}")
+        self.partition.setPlainText("\n".join(lines))
 
     def export_witness(self) -> None:
         if not self.state.history:
-            QMessageBox.information(self, "Witness", "No moves to export yet.")
+            QMessageBox.information(self, "Witness", "No history to export yet.")
             return
         path, _ = QFileDialog.getSaveFileName(self, "Export witness", filter="JSON (*.json)")
         if not path:
@@ -342,183 +392,173 @@ class AnalysisTab(QWidget):
         export_witness_trace(path, self.state.history)
 
 
-class RulesTab(QWidget):
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        text = QTextEdit()
-        text.setReadOnly(True)
-        text.setMarkdown(
-            """
-            # Two-Way Global Bisimulation Game
-
-            Spoiler chooses a graph (A or B) and a move type:
-            - **Forward** follows an outgoing edge.
-            - **Backward** follows an incoming edge.
-            - **Jump** teleports to any vertex.
-
-            Duplicator must mirror the move type on the *other* graph. If they
-            cannot respond the game ends immediately and Spoiler wins. If the
-            game can continue forever Duplicator survives.
-            """
-        )
-        layout.addWidget(text)
-
-
 class ExperimentsTab(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        self.run_button = QPushButton("Run experiment")
-        self.run_button.clicked.connect(self.run_experiment)
+        self.run_button = QPushButton("Run hybrid 5-game experiment")
         self.output = QTextEdit()
         self.output.setReadOnly(True)
         layout.addWidget(self.run_button)
         layout.addWidget(self.output)
+        self.run_button.clicked.connect(self.run_experiment)
 
     def run_experiment(self) -> None:
-        from ..experiments.run import run_match
+        from ..experiments.run import main as run_main
 
-        graph_path = Path("twgbg/puzzles/preset_games/sample_pair.json")
-        graph_a, graph_b = load_graph_pair(str(graph_path))
-        result = run_match(graph_a, graph_b, RuleSet(), 2, 2)
-        self.output.setPlainText(str(result))
+        args = ["twgbg/puzzles/preset_games/sample_pair.json", "--games", "5", "--mode", "hybrid"]
+        run_main(args)
+        self.output.setPlainText("Experiment completed. Results saved to experiments.csv")
 
 
 class MainWindow(QMainWindow):
     def __init__(self, state: GameState) -> None:
         super().__init__()
         self.state = state
-        self.rules = RuleSet()
         self.setWindowTitle("Two-Way Global Bisimulation Game")
-        self.resize(1400, 900)
+        self.resize(1500, 950)
         self.tabs = QTabWidget()
-        self.play_tab = PlayTab(state, self.rules)
+        self.play_tab = PlayTab(state)
         self.analysis_tab = AnalysisTab(state)
-        self.rules_tab = RulesTab()
-        self.experiments_tab = ExperimentsTab()
+        self.learn_tab = TutorialWidget()
         self.tabs.addTab(self.play_tab, "Play")
-        self.tabs.addTab(self.rules_tab, "Rules")
+        self.tabs.addTab(self.learn_tab, "Learn")
         self.tabs.addTab(self.analysis_tab, "Analysis & Coach")
-        self.tabs.addTab(self.experiments_tab, "Experiments")
+        self.tabs.addTab(ExperimentsTab(), "Experiments")
         self.setCentralWidget(self.tabs)
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.play_tab.spoiler_move.connect(self._on_spoiler_move)
-        self.play_tab.duplicator_move.connect(self._on_dup_move)
-        self._build_actions()
-        self.high_contrast = False
+        self._build_toolbar()
+        self.play_tab.commentary_ready.connect(self.analysis_tab.set_commentary)
+        self.play_tab.spoiler_move.connect(lambda move: self.statusBar().showMessage(f"Spoiler played {move}"))
+        self.play_tab.duplicator_move.connect(lambda move: self.statusBar().showMessage(f"Duplicator replied {move}"))
 
-    def _build_actions(self) -> None:
-        save_action = QAction("Save", self)
+    def _build_toolbar(self) -> None:
+        toolbar = QToolBar("Main")
+        toolbar.setMovable(False)
+        self.addToolBar(toolbar)
+
+        new_action = QAction(QIcon.fromTheme("document-new"), "Load sample puzzle", self)
+        new_action.triggered.connect(self.load_sample)
+        toolbar.addAction(new_action)
+
+        save_action = QAction(QIcon.fromTheme("document-save"), "Save session", self)
         save_action.setShortcut(QKeySequence.Save)
         save_action.triggered.connect(self.save_session)
-        load_action = QAction("Load", self)
+        toolbar.addAction(save_action)
+
+        load_action = QAction(QIcon.fromTheme("document-open"), "Load session", self)
         load_action.setShortcut(QKeySequence.Open)
         load_action.triggered.connect(self.load_session)
+        toolbar.addAction(load_action)
+
+        export_png_action = QAction("Export PNG", self)
+        export_png_action.triggered.connect(self.export_png)
+        toolbar.addAction(export_png_action)
+
+        export_svg_action = QAction("Export SVG", self)
+        export_svg_action.triggered.connect(self.export_svg)
+        toolbar.addAction(export_svg_action)
+
         undo_action = QAction("Undo", self)
         undo_action.setShortcut(QKeySequence.Undo)
         undo_action.triggered.connect(self.undo)
+        toolbar.addAction(undo_action)
+
         redo_action = QAction("Redo", self)
         redo_action.setShortcut(QKeySequence.Redo)
         redo_action.triggered.connect(self.redo)
-        theme_action = QAction("High contrast", self)
-        theme_action.setShortcut("Shift+H")
-        theme_action.triggered.connect(self.toggle_contrast)
-        self.addAction(save_action)
-        self.addAction(load_action)
-        self.addAction(undo_action)
-        self.addAction(redo_action)
-        self.addAction(theme_action)
-        space_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
-        space_shortcut.activated.connect(self.play_tab.request_spoiler_move)
-        hint_shortcut = QShortcut(QKeySequence("H"), self)
-        hint_shortcut.activated.connect(self._show_hints)
-        replay_shortcut = QShortcut(QKeySequence("R"), self)
-        replay_shortcut.activated.connect(self.play_tab.replay)
-        pv_shortcut = QShortcut(QKeySequence("P"), self)
-        pv_shortcut.activated.connect(lambda: self.play_tab.pv_toggle.setChecked(not self.play_tab.pv_toggle.isChecked()))
-        heat_shortcut = QShortcut(QKeySequence("M"), self)
-        heat_shortcut.activated.connect(lambda: self.play_tab.heat_toggle.setChecked(not self.play_tab.heat_toggle.isChecked()))
+        toolbar.addAction(redo_action)
 
-    def _show_hints(self) -> None:
-        vertices = [reply.target for reply in self.play_tab.current_hints]
-        if self.play_tab.state.history and self.play_tab.state.history[-1].graph == "A":
-            self.play_tab.view_b.show_hints(vertices)
-        else:
-            self.play_tab.view_a.show_hints(vertices)
+        QShortcut(QKeySequence(Qt.Key_Space), self, activated=self.play_tab.request_spoiler_move)
+        QShortcut(QKeySequence("H"), self, activated=lambda: self.play_tab.hint_panel.update_hints(self.play_tab.current_responses, self.play_tab.duplicator_select))
+        QShortcut(QKeySequence("R"), self, activated=self.play_tab.replay)
 
-    def toggle_contrast(self) -> None:
-        self.high_contrast = not self.high_contrast
-        palette = HIGH_CONTRAST_PALETTE if self.high_contrast else DARK_PALETTE
-        for view in (self.play_tab.view_a, self.play_tab.view_b):
-            view.scene.palette = palette
-            view.scene.setBackgroundBrush(palette.background)
-            view.scene.reset_colours()
+    # ------------------------------------------------------------------
+    def load_sample(self) -> None:
+        graph_path = Path("twgbg/puzzles/preset_games/sample_pair.json")
+        if not graph_path.exists():
+            QMessageBox.warning(self, "Sample", "Sample puzzle missing")
+            return
+        self.state.graph_a, self.state.graph_b = load_graph_pair(str(graph_path))
+        self.state.position = Position(self.state.graph_a.vertices()[0], self.state.graph_b.vertices()[0])
+        self.state.stack = [self.state.position]
+        self.state.history.clear()
+        self.state.replies.clear()
+        self.play_tab.reset_graphs(self.state.graph_a, self.state.graph_b)
+        self.statusBar().showMessage("Loaded sample puzzle")
 
-    def _on_spoiler_move(self, move: Move) -> None:
-        self.statusBar().showMessage(f"Spoiler move: {move}")
-        commentary = f"Spoiler chose {move.move_type} on graph {move.graph}."
-        self.analysis_tab.set_commentary(commentary)
-
-    def _on_dup_move(self, move: Move) -> None:
-        self.statusBar().showMessage(f"Duplicator move: {move}")
-
-    # Session management -------------------------------------------------
     def save_session(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Save session", filter="JSON (*.json)")
         if not path:
             return
         data = {
             "position": {
-                "a": self.state.position.vertex_a,
-                "b": self.state.position.vertex_b,
+                "vertex_a": self.state.position.vertex_a,
+                "vertex_b": self.state.position.vertex_b,
             },
             "history": [move.__dict__ for move in self.state.history],
-            "reply_history": [move.__dict__ for move in self.state.reply_history],
+            "replies": [move.__dict__ for move in self.state.replies],
+            "rules": self.state.rules.__dict__,
         }
-        with open(path, "w", encoding="utf8") as fh:
-            json.dump(data, fh, indent=2)
+        with open(path, "w", encoding="utf8") as handle:
+            json.dump(data, handle, indent=2)
+        self.statusBar().showMessage("Session saved")
 
     def load_session(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Load session", filter="JSON (*.json)")
         if not path:
             return
-        with open(path, "r", encoding="utf8") as fh:
-            data = json.load(fh)
-        self.state.position = Position(data["position"]["a"], data["position"]["b"])
+        with open(path, "r", encoding="utf8") as handle:
+            data = json.load(handle)
+        self.state.position = Position(data["position"]["vertex_a"], data["position"]["vertex_b"])
         self.state.history = [Move(**move) for move in data.get("history", [])]
-        self.state.reply_history = [Move(**move) for move in data.get("reply_history", [])]
-        self.state.position_stack = [self.state.position]
+        self.state.replies = [Move(**move) for move in data.get("replies", [])]
+        self.state.rules = RuleSet(**data.get("rules", {}))
+        self.state.stack = [self.state.position]
         self.state.redo_stack.clear()
         self.statusBar().showMessage("Session loaded")
+
+    def export_png(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Export PNG", filter="PNG (*.png)")
+        if not path:
+            return
+        export_scene_png(self.play_tab.view_a.scene, path)
+
+    def export_svg(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Export SVG", filter="SVG (*.svg)")
+        if not path:
+            return
+        export_scene_svg(self.play_tab.view_a.scene, path)
 
     def undo(self) -> None:
         pos = self.state.undo()
         if pos:
-            self.play_tab.view_a.centre_on_vertex(pos.vertex_a)
-            self.play_tab.view_b.centre_on_vertex(pos.vertex_b)
             self.statusBar().showMessage("Undo")
+            self.play_tab.view_a.centre_on(pos.vertex_a)
+            self.play_tab.view_b.centre_on(pos.vertex_b)
 
     def redo(self) -> None:
         pos = self.state.redo()
         if pos:
-            self.play_tab.view_a.centre_on_vertex(pos.vertex_a)
-            self.play_tab.view_b.centre_on_vertex(pos.vertex_b)
             self.statusBar().showMessage("Redo")
+            self.play_tab.view_a.centre_on(pos.vertex_a)
+            self.play_tab.view_b.centre_on(pos.vertex_b)
 
 
 def load_default_state() -> GameState:
-    graph_a = DiGraph.path(4, name="Graph A")
-    graph_b = DiGraph.path(4, name="Graph B")
-    position = Position("0", "0")
-    state = GameState(graph_a, graph_b, position)
+    graph_a = DiGraph.path(5, name="Graph A")
+    graph_b = DiGraph.path(5, name="Graph B")
+    position = Position(graph_a.vertices()[0], graph_b.vertices()[0])
+    rules = RuleSet()
+    state = GameState(graph_a, graph_b, position, rules)
     state.push(position)
     return state
 
 
 def main() -> None:
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
     state = load_default_state()
     window = MainWindow(state)
     window.show()
