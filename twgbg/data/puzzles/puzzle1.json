@@ -1,0 +1,17 @@
+{
+  "name": "Chain mismatch",
+  "description": "Spoiler aims to exploit differing chain lengths.",
+  "graph_a": {
+    "a0": ["a1"],
+    "a1": ["a2"],
+    "a2": []
+  },
+  "graph_b": {
+    "b0": ["b1"],
+    "b1": ["b2"],
+    "b2": ["b3"],
+    "b3": []
+  },
+  "start": ["a0", "b0"],
+  "expected": "spoiler"
+}

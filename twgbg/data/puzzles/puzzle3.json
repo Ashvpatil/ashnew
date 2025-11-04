@@ -1,0 +1,16 @@
+{
+  "name": "Twin stars",
+  "description": "Balanced stars should favour Duplicator.",
+  "graph_a": {
+    "a0": ["a1", "a2"],
+    "a1": [],
+    "a2": []
+  },
+  "graph_b": {
+    "b0": ["b1", "b2"],
+    "b1": [],
+    "b2": []
+  },
+  "start": ["a0", "b0"],
+  "expected": "duplicator"
+}
