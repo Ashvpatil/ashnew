@@ -76,7 +76,7 @@ class GraphScene(QGraphicsScene):
         label.setPos(-label_rect.width() / 2, -label_rect.height() / 2)
 
         halo = QGraphicsEllipseItem(-36, -36, 72, 72, ellipse)
-        halo.setBrush(Qt.NoBrush)
+        halo.setBrush(QBrush(Qt.NoBrush))
         halo.setPen(QPen(self.palette.accent_alt, 3, Qt.DashLine))
         halo.setOpacity(0.0)
         halo.setZValue(3)
