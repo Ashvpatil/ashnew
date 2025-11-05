@@ -127,12 +127,15 @@ class GraphScene(QGraphicsScene):
     # ------------------------------------------------------------------
     def partition_nodes(self) -> None:
         clusters = signature_partition(self.graph)
-        for vertex, cluster_id in clusters.items():
-            meta = self.graph.metadata(vertex)
-            meta.cluster = cluster_id
-            meta.signature = meta.signature or f"C{cluster_id}"
-            node = self.node_items[vertex]
-            node.item.setToolTip(self._tooltip(vertex))
+        for cluster_id, vertices in clusters.items():
+            for vertex in vertices:
+                if vertex not in self.node_items:
+                    continue
+                meta = self.graph.metadata(vertex)
+                meta.cluster = cluster_id
+                meta.signature = meta.signature or f"C{cluster_id}"
+                node = self.node_items[vertex]
+                node.item.setToolTip(self._tooltip(vertex))
 
     def _force_layout(self, iterations: int = 60) -> None:
         if len(self.node_items) <= 2:
