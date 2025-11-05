@@ -523,13 +523,16 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "Export PNG", filter="PNG (*.png)")
         if not path:
             return
-        export_scene_png(self.play_tab.view_a.scene, path)
+        export_scene_png(self.play_tab.view_a.graph_scene, path)
 
     def export_svg(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Export SVG", filter="SVG (*.svg)")
         if not path:
             return
-        export_scene_svg(self.play_tab.view_a.scene, path)
+        try:
+            export_scene_svg(self.play_tab.view_a.graph_scene, path)
+        except RuntimeError as exc:
+            QMessageBox.warning(self, 'Export SVG', str(exc))
 
     def undo(self) -> None:
         pos = self.state.undo()

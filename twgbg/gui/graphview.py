@@ -257,8 +257,8 @@ class GraphView(QGraphicsView):
     def __init__(self, graph: DiGraph, parent=None) -> None:
         super().__init__(parent)
         self.graph = graph
-        self.scene = GraphScene(graph)
-        self.setScene(self.scene)
+        self.graph_scene = GraphScene(graph)
+        self.setScene(self.graph_scene)
         self.setRenderHints(self.renderHints() | QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
         self.setDragMode(QGraphicsView.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
@@ -272,13 +272,13 @@ class GraphView(QGraphicsView):
         self.scale(factor, factor)
 
     def centre_on(self, vertex: str) -> None:
-        if vertex in self.scene.node_items:
-            self.centerOn(self.scene.node_items[vertex].item)
+        if vertex in self.graph_scene.node_items:
+            self.centerOn(self.graph_scene.node_items[vertex].item)
 
     def animate_move(self, move: Move) -> None:
-        if move.target not in self.scene.node_items:
+        if move.target not in self.graph_scene.node_items:
             return
-        target_item = self.scene.node_items[move.target].item
+        target_item = self.graph_scene.node_items[move.target].item
         anim = QPropertyAnimation(target_item, b"scale")
         anim.setDuration(420)
         anim.setStartValue(1.0)
@@ -287,27 +287,27 @@ class GraphView(QGraphicsView):
         anim.setLoopCount(2)
         anim.finished.connect(lambda: target_item.setScale(1.0))
         anim.start()
-        self.scene.animations.append(anim)
+        self.graph_scene.animations.append(anim)
 
     def show_hints(self, vertices: Iterable[str]) -> None:
-        self.scene.highlight_vertices(vertices)
+        self.graph_scene.highlight_vertices(vertices)
 
     def clear_hints(self) -> None:
-        self.scene.clear_hints()
+        self.graph_scene.clear_hints()
 
     def set_pv(self, vertices: Sequence[str]) -> None:
-        self.scene.show_pv(vertices)
+        self.graph_scene.show_pv(vertices)
 
     def set_heatmap(self, visits: Dict[str, int]) -> None:
-        self.scene.reset_colours()
-        self.scene.apply_heatmap(visits)
+        self.graph_scene.reset_colours()
+        self.graph_scene.apply_heatmap(visits)
 
     def clear_heatmap(self) -> None:
-        self.scene.reset_colours()
+        self.graph_scene.reset_colours()
 
     def set_palette(self, palette: Palette) -> None:
         self.current_palette = palette
-        self.scene.set_palette(palette)
+        self.graph_scene.set_palette(palette)
 
     def set_high_contrast(self, enabled: bool) -> None:
         palette = HIGH_CONTRAST_PALETTE if enabled else DARK_PALETTE
@@ -318,4 +318,4 @@ class GraphView(QGraphicsView):
         self.set_palette(palette)
 
     def export_png(self, path: str) -> None:
-        self.scene.export_png(path)
+        self.graph_scene.export_png(path)
