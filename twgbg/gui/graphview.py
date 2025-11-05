@@ -5,7 +5,7 @@ import math
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Sequence
 
-from PyQt5.QtCore import QEasingCurve, QPointF, QPropertyAnimation, QRectF, Qt
+from PyQt5.QtCore import QEasingCurve, QPointF, QRectF, Qt, QVariantAnimation
 from PyQt5.QtGui import QBrush, QColor, QPainter, QPen, QPixmap, QPainterPath
 from PyQt5.QtWidgets import (
     QGraphicsDropShadowEffect,
@@ -39,7 +39,7 @@ class GraphScene(QGraphicsScene):
         self.node_items: Dict[str, NodeState] = {}
         self.edge_items: Dict[tuple, QGraphicsPathItem] = {}
         self.pv_items: List[QGraphicsPathItem] = []
-        self.animations: List[QPropertyAnimation] = []
+        self.animations: List[QVariantAnimation] = []
         self.setBackgroundBrush(QBrush(self.palette.background))
         self._build_scene()
 
@@ -183,14 +183,20 @@ class GraphScene(QGraphicsScene):
         target = {str(v) for v in vertices}
         self._clear_animations()
         for vertex, state in self.node_items.items():
-            state.halo.setOpacity(1.0 if vertex in target else 0.0)
+            if vertex in target:
+                state.halo.setOpacity(1.0)
+            else:
+                state.halo.setOpacity(0.0)
             if pulse and vertex in target:
-                anim = QPropertyAnimation(state.halo, b"opacity")
-                anim.setDuration(600)
-                anim.setStartValue(0.2)
+                anim = QVariantAnimation(self)
+                anim.setDuration(900)
+                anim.setStartValue(0.35)
                 anim.setEndValue(1.0)
                 anim.setEasingCurve(QEasingCurve.InOutQuad)
                 anim.setLoopCount(-1)
+                anim.valueChanged.connect(
+                    lambda value, halo=state.halo: halo.setOpacity(float(value))
+                )
                 anim.start()
                 self.animations.append(anim)
 
@@ -289,13 +295,16 @@ class GraphView(QGraphicsView):
         if target not in self.graph_scene.node_items:
             return
         target_item = self.graph_scene.node_items[target].item
-        anim = QPropertyAnimation(target_item, b"scale")
+        anim = QVariantAnimation(self)
         anim.setDuration(420)
         anim.setStartValue(1.0)
         anim.setEndValue(1.12)
         anim.setEasingCurve(QEasingCurve.OutBack)
         anim.setLoopCount(2)
-        anim.finished.connect(lambda: target_item.setScale(1.0))
+        anim.valueChanged.connect(
+            lambda value, item=target_item: item.setScale(float(value))
+        )
+        anim.finished.connect(lambda item=target_item: item.setScale(1.0))
         anim.start()
         self.graph_scene.animations.append(anim)
 
