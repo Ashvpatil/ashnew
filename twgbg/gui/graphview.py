@@ -49,13 +49,13 @@ class GraphScene(QGraphicsScene):
         self.node_items.clear()
         self.edge_items.clear()
         radius = 220
-        vertices = self.graph.vertices()
-        for index, vertex in enumerate(vertices):
+        vertices = [str(v) for v in self.graph.vertices()]
+        for index, vertex_id in enumerate(vertices):
             angle = (2 * math.pi * index) / max(1, len(vertices))
             pos = QPointF(radius * math.cos(angle), radius * math.sin(angle))
-            self._create_node(vertex, pos)
-        for u, v in self.graph.edges():
-            self._create_edge(u, v)
+            self._create_node(vertex_id, pos)
+        for raw_u, raw_v in self.graph.edges():
+            self._create_edge(str(raw_u), str(raw_v))
         self._force_layout()
         self.partition_nodes()
 
@@ -108,6 +108,8 @@ class GraphScene(QGraphicsScene):
         self.edge_items[(u, v)] = path_item
 
     def _update_edge(self, u: str, v: str) -> None:
+        u = str(u)
+        v = str(v)
         if (u, v) not in self.edge_items:
             return
         source = self.node_items[u].position
@@ -128,7 +130,7 @@ class GraphScene(QGraphicsScene):
     def partition_nodes(self) -> None:
         clusters = signature_partition(self.graph)
         for cluster_id, vertices in clusters.items():
-            for vertex in vertices:
+            for vertex in (str(v) for v in vertices):
                 if vertex not in self.node_items:
                     continue
                 meta = self.graph.metadata(vertex)
@@ -153,7 +155,10 @@ class GraphScene(QGraphicsScene):
                     distance = max(0.01, math.hypot(delta.x(), delta.y()))
                     force = (k * k) / distance
                     disp[v] += delta / distance * force
-            for (v, u) in self.graph.edges():
+            for raw_v, raw_u in self.graph.edges():
+                v, u = str(raw_v), str(raw_u)
+                if v not in positions or u not in positions:
+                    continue
                 delta = positions[v] - positions[u]
                 distance = max(0.01, math.hypot(delta.x(), delta.y()))
                 force = (distance * distance) / k
@@ -170,12 +175,12 @@ class GraphScene(QGraphicsScene):
             state = self.node_items[vertex]
             state.position = pos
             state.item.setPos(pos)
-        for u, v in self.graph.edges():
-            self._update_edge(u, v)
+        for raw_u, raw_v in self.graph.edges():
+            self._update_edge(str(raw_u), str(raw_v))
 
     # ------------------------------------------------------------------
     def highlight_vertices(self, vertices: Iterable[str], pulse: bool = True) -> None:
-        target = set(vertices)
+        target = {str(v) for v in vertices}
         self._clear_animations()
         for vertex, state in self.node_items.items():
             state.halo.setOpacity(1.0 if vertex in target else 0.0)
@@ -203,7 +208,8 @@ class GraphScene(QGraphicsScene):
         self.pv_items.clear()
         if len(vertices) < 2:
             return
-        for a, b in zip(vertices, vertices[1:]):
+        for raw_a, raw_b in zip(vertices, vertices[1:]):
+            a, b = str(raw_a), str(raw_b)
             if a not in self.node_items or b not in self.node_items:
                 continue
             path = self._edge_path(self.node_items[a].position, self.node_items[b].position)
@@ -219,9 +225,10 @@ class GraphScene(QGraphicsScene):
     def apply_heatmap(self, weights: Dict[str, int]) -> None:
         if not weights:
             return
-        maximum = max(weights.values()) or 1
+        normalised = {str(vertex): value for vertex, value in weights.items()}
+        maximum = max(normalised.values()) or 1
         for vertex, state in self.node_items.items():
-            weight = weights.get(vertex, 0)
+            weight = normalised.get(vertex, 0)
             color = QColor(self.palette.accent)
             color.setAlphaF(0.35 + 0.65 * (weight / maximum))
             state.item.setBrush(QBrush(color))
@@ -273,13 +280,15 @@ class GraphView(QGraphicsView):
         self.scale(factor, factor)
 
     def centre_on(self, vertex: str) -> None:
-        if vertex in self.graph_scene.node_items:
-            self.centerOn(self.graph_scene.node_items[vertex].item)
+        vertex_id = str(vertex)
+        if vertex_id in self.graph_scene.node_items:
+            self.centerOn(self.graph_scene.node_items[vertex_id].item)
 
     def animate_move(self, move: Move) -> None:
-        if move.target not in self.graph_scene.node_items:
+        target = str(move.target)
+        if target not in self.graph_scene.node_items:
             return
-        target_item = self.graph_scene.node_items[move.target].item
+        target_item = self.graph_scene.node_items[target].item
         anim = QPropertyAnimation(target_item, b"scale")
         anim.setDuration(420)
         anim.setStartValue(1.0)

@@ -14,7 +14,7 @@ pip install -r requirements.txt
 ## Running
 
 ```bash
-python -m twgbg.gui.app
+python -m twgbg.gui
 ```
 
 ## Packaging
@@ -51,5 +51,5 @@ toolkit:
 1. Replace imports under `twgbg/gui` with the target framework equivalents.
 2. Update `requirements.txt`, `pyproject.toml`, and `pyinstaller.spec` to list
    the new dependency.
-3. Re-test the application entry point (`python -m twgbg.gui.app`) and adjust
+3. Re-test the application entry point (``python -m twgbg.gui``) and adjust
    styles in `twgbg/gui/themes.py` if the colour constants differ.
