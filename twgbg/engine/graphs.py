@@ -92,6 +92,17 @@ class DiGraph:
         return len(self._pred.get(u, set())), len(self._succ.get(u, set()))
 
     def metadata(self, u: str) -> VertexMetadata:
+        """Return metadata for *u*, creating a default record if missing.
+
+        The GUI sometimes requests metadata for vertices before they are
+        explicitly labelled (for instance when loading external JSON where a
+        vertex is only mentioned inside an edge list).  On some user systems we
+        observed a ``KeyError`` being raised when ``u`` was provided as an
+        integer.  Converting to ``str`` here keeps the bookkeeping consistent
+        regardless of how callers reference the vertex and guarantees that a
+        metadata record exists before returning it.
+        """
+
         key = str(u)
         if key not in self._metadata:
             self._metadata[key] = VertexMetadata(key)
@@ -100,7 +111,9 @@ class DiGraph:
         return self._metadata[key]
 
     def set_metadata(self, u: str, **kwargs: object) -> None:
-        data = self._metadata[u]
+        # Reuse :meth:`metadata` to normalise the key and lazily populate the
+        # entry instead of assuming it already exists.
+        data = self.metadata(u)
         for key, value in kwargs.items():
             setattr(data, key, value)
 
