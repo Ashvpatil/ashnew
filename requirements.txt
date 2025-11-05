@@ -1,2 +1,2 @@
-PySide6>=6.6
+PyQt5>=5.15
 numpy>=1.26

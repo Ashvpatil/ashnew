@@ -1,6 +1,6 @@
 # Two-Way Global Bisimulation Game
 
-An interactive PySide6 desktop application showcasing the Two-Way Global
+An interactive PyQt5 desktop application showcasing the Two-Way Global
 Bisimulation Game between Spoiler (AI) and Duplicator (human).
 
 ## Installation
@@ -45,5 +45,11 @@ pyinstaller pyinstaller.spec
 
 ## Switching UI Stack
 
-The project is built with PySide6. To adapt to PyQt5 or other toolkits, replace
-imports under `twgbg/gui` and update `pyproject.toml` dependencies accordingly.
+The project is built with PyQt5. To migrate to another Qt binding or GUI
+toolkit:
+
+1. Replace imports under `twgbg/gui` with the target framework equivalents.
+2. Update `requirements.txt`, `pyproject.toml`, and `pyinstaller.spec` to list
+   the new dependency.
+3. Re-test the application entry point (`python -m twgbg.gui.app`) and adjust
+   styles in `twgbg/gui/themes.py` if the colour constants differ.

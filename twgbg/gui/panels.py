@@ -4,8 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Iterable, List
 
-from PySide6.QtCore import Signal
-from PySide6.QtWidgets import (
+from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -23,8 +23,8 @@ from ..engine.game import Move
 
 
 class AISettingsPanel(QGroupBox):
-    engine_changed = Signal(str)
-    settings_changed = Signal()
+    engine_changed = pyqtSignal(str)
+    settings_changed = pyqtSignal()
 
     def __init__(self, parent=None) -> None:
         super().__init__("Spoiler AI")
@@ -81,7 +81,7 @@ class AISettingsPanel(QGroupBox):
 
 
 class RulePanel(QGroupBox):
-    rules_changed = Signal()
+    rules_changed = pyqtSignal()
 
     def __init__(self, parent=None) -> None:
         super().__init__("Rules & Variants")
@@ -144,7 +144,7 @@ class RulePanel(QGroupBox):
 
 
 class OverlayPanel(QGroupBox):
-    settings_changed = Signal()
+    settings_changed = pyqtSignal()
 
     def __init__(self, parent=None) -> None:
         super().__init__("Overlays")

@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict
 
-from PySide6.QtGui import QColor, QFont
+from PyQt5.QtGui import QColor, QFont
 
 
 @dataclass

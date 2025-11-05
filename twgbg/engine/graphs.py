@@ -46,6 +46,7 @@ class DiGraph:
     # Basic manipulation
     # ------------------------------------------------------------------
     def add_vertex(self, vertex: str, *, label: Optional[str] = None) -> None:
+        vertex = str(vertex)
         if vertex not in self._succ:
             self._succ[vertex] = set()
             self._pred[vertex] = set()
@@ -91,7 +92,12 @@ class DiGraph:
         return len(self._pred.get(u, set())), len(self._succ.get(u, set()))
 
     def metadata(self, u: str) -> VertexMetadata:
-        return self._metadata[u]
+        key = str(u)
+        if key not in self._metadata:
+            self._metadata[key] = VertexMetadata(key)
+            self._succ.setdefault(key, set())
+            self._pred.setdefault(key, set())
+        return self._metadata[key]
 
     def set_metadata(self, u: str, **kwargs: object) -> None:
         data = self._metadata[u]

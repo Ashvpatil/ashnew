@@ -3,17 +3,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QPainter
+from PyQt5.QtCore import QRectF, Qt
+from PyQt5.QtGui import QPainter
 try:
-    from PySide6.QtSvg import QSvgGenerator
+    from PyQt5.QtSvg import QSvgGenerator
 except ImportError:  # pragma: no cover - optional dependency
     QSvgGenerator = None  # type: ignore[assignment]
-from PySide6.QtWidgets import QGraphicsScene
+from PyQt5.QtWidgets import QGraphicsScene
 
 
 def export_scene_png(scene: QGraphicsScene, path: str) -> None:
-    from PySide6.QtGui import QPixmap
+    from PyQt5.QtGui import QPixmap
 
     bounds: QRectF = scene.itemsBoundingRect().adjusted(-16, -16, 16, 16)
     pixmap = QPixmap(int(bounds.width()), int(bounds.height()))
@@ -27,7 +27,7 @@ def export_scene_png(scene: QGraphicsScene, path: str) -> None:
 
 def export_scene_svg(scene: QGraphicsScene, path: str) -> None:
     if QSvgGenerator is None:
-        raise RuntimeError('SVG export requires PySide6-QtSvg to be installed')
+        raise RuntimeError('SVG export requires PyQt5-QtSvg to be installed')
     generator = QSvgGenerator()
     generator.setFileName(str(Path(path)))
     bounds: QRectF = scene.itemsBoundingRect().adjusted(-16, -16, 16, 16)

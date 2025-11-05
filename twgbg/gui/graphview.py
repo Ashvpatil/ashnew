@@ -5,9 +5,9 @@ import math
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Sequence
 
-from PySide6.QtCore import QEasingCurve, QPointF, QPropertyAnimation, QRectF, Qt
-from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import (
+from PyQt5.QtCore import QEasingCurve, QPointF, QPropertyAnimation, QRectF, Qt
+from PyQt5.QtGui import QBrush, QColor, QPainter, QPen, QPixmap, QPainterPath
+from PyQt5.QtWidgets import (
     QGraphicsDropShadowEffect,
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -115,8 +115,6 @@ class GraphScene(QGraphicsScene):
         self.edge_items[(u, v)].setPath(self._edge_path(source, target))
 
     def _edge_path(self, source: QPointF, target: QPointF):
-        from PySide6.QtGui import QPainterPath
-
         path = QPainterPath(source)
         if source == target:
             path.addEllipse(source, 18, 18)

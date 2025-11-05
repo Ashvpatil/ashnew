@@ -1,4 +1,4 @@
-"""Main PySide6 application entry point."""
+"""Main PyQt5 application entry point."""
 from __future__ import annotations
 
 import json
@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal
-from PySide6.QtGui import QAction, QIcon, QKeySequence, QShortcut
-from PySide6.QtWidgets import (
+from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QAction, QIcon, QKeySequence
+from PyQt5.QtWidgets import (
     QApplication,
     QFileDialog,
     QGridLayout,
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QShortcut,
     QSplitter,
     QStatusBar,
     QTabWidget,
@@ -78,8 +79,8 @@ class GameState:
 
 
 class SpoilerWorker(QObject):
-    finished = Signal(dict)
-    failed = Signal(str)
+    finished = pyqtSignal(dict)
+    failed = pyqtSignal(str)
 
     def __init__(
         self,
@@ -171,9 +172,9 @@ class SpoilerWorker(QObject):
 
 
 class PlayTab(QWidget):
-    spoiler_move = Signal(Move)
-    duplicator_move = Signal(Move)
-    commentary_ready = Signal(str, List[str])
+    spoiler_move = pyqtSignal(Move)
+    duplicator_move = pyqtSignal(Move)
+    commentary_ready = pyqtSignal(str, list)
 
     def __init__(self, state: GameState, parent=None) -> None:
         super().__init__(parent)
