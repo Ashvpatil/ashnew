@@ -1,33 +1,103 @@
-"""Canvas renderer for the bisimulation graphs with directed edge visuals."""
+"""Canvas renderer for the bisimulation graphs with rich visuals."""
 
 from __future__ import annotations
 
 import math
 import tkinter as tk
 from dataclasses import dataclass
+from tkinter import ttk
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..engine.game import Move, Position
 from ..engine.graphs import DiGraph
 
+# Geometry and palette constants -------------------------------------------------
 NODE_R = 18
+EDGE_WIDTH = 2
+ARROWSHAPE = (12, 16, 6)
+
 EDGE_COLOR = "#8aa"
 EDGE_FORWARD = "#22c55e"
 EDGE_BACKWARD = "#ef4444"
 EDGE_JUMP = "#eab308"
-ARROWSHAPE = (12, 16, 6)
-EDGE_WIDTH = 2
+
+COL_BG_TOP = "#0b1020"
+COL_BG_BOTTOM = "#0e172a"
+COL_BG_VIGNETTE = "#05070e"
+COL_EDGE = "#7e8ca0"
+COL_EDGE_HOVER = "#b7c2d1"
+COL_NODE_CURR = "#60a5fa"
+COL_HINT_HALO = "#8bffb0"
+COL_PV_EDGE = "#22c55e"
+COL_HEAT_LOW = "#1f2937"
+COL_HEAT_HIGH = "#60a5fa"
+COL_LABEL = "#f9fafb"
+COL_LABEL_SHADOW = "#000000"
+COL_NODE_A = "#38bdf8"
+COL_NODE_B = "#f472b6"
+
+PULSE_INTERVAL_MS = 33
+PULSE_SPEED = 0.07
+PV_SPEED = 2.5
+
+
+# Helper utilities ----------------------------------------------------------------
+def _lerp(a: float, b: float, t: float) -> float:
+    return a + (b - a) * t
+
+
+def _lerp_hex(color_a: str, color_b: str, t: float) -> str:
+    """Blend two hex colours."""
+
+    a = color_a.lstrip("#")
+    b = color_b.lstrip("#")
+    ra, ga, ba = int(a[0:2], 16), int(a[2:4], 16), int(a[4:6], 16)
+    rb, gb, bb = int(b[0:2], 16), int(b[2:4], 16), int(b[4:6], 16)
+    r = int(_lerp(ra, rb, t))
+    g = int(_lerp(ga, gb, t))
+    b_val = int(_lerp(ba, bb, t))
+    return f"#{r:02x}{g:02x}{b_val:02x}"
+
+
+def _draw_background(canvas: tk.Canvas, width: int, height: int) -> None:
+    """Render a vertical gradient with a vignette overlay."""
+
+    steps = max(height // 6, 1)
+    for i in range(steps):
+        t = i / max(steps - 1, 1)
+        color = _lerp_hex(COL_BG_TOP, COL_BG_BOTTOM, t)
+        canvas.create_rectangle(
+            0,
+            i * height / steps,
+            width,
+            (i + 1) * height / steps,
+            outline="",
+            fill=color,
+            tags=("background",),
+        )
+    # Vignette overlay
+    vignette_radius = max(width, height)
+    canvas.create_oval(
+        -vignette_radius * 0.25,
+        -vignette_radius * 0.25,
+        width + vignette_radius * 0.25,
+        height + vignette_radius * 0.25,
+        fill=COL_BG_VIGNETTE,
+        outline="",
+        stipple="gray25",
+        tags=("background",),
+    )
 
 
 def _trim_to_circle(x1: float, y1: float, x2: float, y2: float, r: float = NODE_R) -> Tuple[float, float, float, float]:
-    """Trim a segment so it touches the circumference of circular nodes."""
+    """Trim a segment so it meets the edge of two circular nodes."""
 
     dx = x2 - x1
     dy = y2 - y1
     dist = math.hypot(dx, dy)
     if dist <= 1e-6:
         return x1, y1, x2, y2
-    trim = min(r / dist, 0.49)
+    trim = min(r / dist, 0.48)
     sx = x1 + dx * trim
     sy = y1 + dy * trim
     ex = x2 - dx * trim
@@ -44,7 +114,7 @@ def _curve_offset(u_key: str, v_key: str, mag: float = 18.0) -> float:
 
 
 def _quad_curve_points(x1: float, y1: float, x2: float, y2: float, offset: float) -> List[float]:
-    """Return control points for a quadratic bezier with perpendicular offset."""
+    """Return control points for a quadratic bezier with a perpendicular offset."""
 
     mx = (x1 + x2) / 2.0
     my = (y1 + y2) / 2.0
@@ -67,7 +137,7 @@ def _draw_directed_edge(
     x2: float,
     y2: float,
     *,
-    color: str = EDGE_COLOR,
+    color: str = COL_EDGE,
     width: float = EDGE_WIDTH,
     curved: bool = False,
     offset: float = 16.0,
@@ -114,23 +184,24 @@ def _draw_self_loop(
     y: float,
     r: float = NODE_R,
     *,
-    color: str = EDGE_COLOR,
+    color: str = COL_EDGE,
     width: float = EDGE_WIDTH,
     arrowshape: Tuple[int, int, int] = ARROWSHAPE,
     tags: Tuple[str, ...] = (),
 ) -> int:
-    """Draw a self loop as a small circular arc with arrow head."""
+    """Draw a self-loop as a smooth arc with an arrow head."""
 
     loop_r = r * 1.6
+    ctrl = r * 1.2
     points = [
         x,
         y - r,
         x + loop_r,
-        y - loop_r - r * 0.3,
+        y - loop_r - ctrl,
         x,
-        y - loop_r * 2.0,
+        y - loop_r * 2,
         x - loop_r,
-        y - loop_r - r * 0.3,
+        y - loop_r - ctrl,
         x,
         y - r,
     ]
@@ -139,7 +210,7 @@ def _draw_self_loop(
         fill=color,
         width=width,
         smooth=True,
-        splinesteps=24,
+        splinesteps=32,
         arrow=tk.LAST,
         arrowshape=arrowshape,
         capstyle=tk.ROUND,
@@ -147,6 +218,7 @@ def _draw_self_loop(
     )
 
 
+# Layout container ----------------------------------------------------------------
 @dataclass
 class LayoutState:
     positions: Dict[str, Tuple[float, float]]
@@ -154,10 +226,11 @@ class LayoutState:
 
 
 class GraphCanvas(tk.Canvas):
-    """Interactive canvas supporting zoom, pan and overlays."""
+    """Interactive canvas supporting zoom, pan, overlays, and hint chips."""
 
-    def __init__(self, master: tk.Widget, **kwargs) -> None:
-        super().__init__(master, background="#111", highlightthickness=0, **kwargs)
+    def __init__(self, master: tk.Widget, **kwargs: object) -> None:
+        super().__init__(master, background=COL_BG_BOTTOM, highlightthickness=0, **kwargs)
+        self.master = master
         self.scale_factor = 1.0
         self.offset = (0.0, 0.0)
         self.graph_a: Optional[DiGraph] = None
@@ -171,20 +244,35 @@ class GraphCanvas(tk.Canvas):
         self.show_pv = True
         self.layout: Dict[str, LayoutState] = {}
         self.node_items: Dict[int, Tuple[str, str]] = {}
+        self.node_colors: Dict[int, str] = {}
         self.edge_colors: Dict[int, str] = {}
+        self._halo_items: Dict[int, Tuple[str, str]] = {}
+        self._pv_items: List[int] = []
         self.on_node_click: Optional[Callable[[str, str], None]] = None
-        self.bind("<Configure>", lambda e: self.redraw())
-        self.bind("<ButtonPress-2>", self._start_pan)
-        self.bind("<B2-Motion>", self._pan)
-        self.bind("<MouseWheel>", self._zoom)
-        self.bind("<Control-MouseWheel>", self._zoom)
-        self.bind("<Button-4>", self._zoom)
-        self.bind("<Button-5>", self._zoom)
-        self.bind("<Button-1>", self._click)
+        self._pan_start: Optional[Tuple[float, float]] = None
+        self._pulse_phase = 0.0
+        self._pv_phase = 0.0
+        self._animation_job: Optional[str] = None
+        self._chip_frame: Optional[ttk.Frame] = None
+        self._chip_buttons: Dict[str, ttk.Button] = {}
+
+        self.bind("<Configure>", self._on_configure)
+        self.bind("<ButtonPress-2>", self._on_pan_start)
+        self.bind("<B2-Motion>", self._on_pan_drag)
+        self.bind("<ButtonRelease-2>", self._on_pan_end)
+        self.bind("<Control-MouseWheel>", self._on_zoom)
+        self.bind("<MouseWheel>", self._on_zoom)
+        self.bind("<Button-4>", self._on_zoom)
+        self.bind("<Button-5>", self._on_zoom)
+        self.bind("<Button-1>", self._on_click)
         self.tag_bind("edge", "<Enter>", self._on_edge_enter)
         self.tag_bind("edge", "<Leave>", self._on_edge_leave)
-        self._pan_start: Optional[Tuple[float, float]] = None
+        self.tag_bind("node", "<Enter>", self._on_node_enter)
+        self.tag_bind("node", "<Leave>", self._on_node_leave)
 
+        self._start_animation()
+
+    # Public API -----------------------------------------------------------------
     def set_graphs(
         self,
         graph_a: DiGraph,
@@ -207,15 +295,13 @@ class GraphCanvas(tk.Canvas):
         heatmap: Dict[Tuple[str, str], int],
     ) -> None:
         self.position = position
-        self.hints_a = list(hints_a)
-        self.hints_b = list(hints_b)
+        self.hints_a = [str(h) for h in hints_a]
+        self.hints_b = [str(h) for h in hints_b]
         self.pv = list(pv)
         self.heatmap = heatmap
         self.redraw()
 
     def set_overlays(self, *, hints: Optional[bool] = None, pv: Optional[bool] = None) -> None:
-        """Toggle visibility of hint halos and principal variation overlays."""
-
         if hints is not None:
             self.show_hints = hints
         if pv is not None:
@@ -225,11 +311,42 @@ class GraphCanvas(tk.Canvas):
     def set_click_callback(self, callback: Callable[[str, str], None]) -> None:
         self.on_node_click = callback
 
-    # Interaction helpers
-    def _start_pan(self, event: tk.Event) -> None:
+    def render_hint_chips(self, options: Dict[str, Iterable[str]]) -> None:
+        """Render a horizontal bar of hint chips beneath the canvas."""
+
+        if self._chip_frame is None:
+            self._chip_frame = ttk.Frame(self.master)
+            self._chip_frame.pack(after=self, fill="x", padx=8, pady=(4, 0))
+        for child in self._chip_frame.winfo_children():
+            child.destroy()
+        self._chip_buttons.clear()
+        if not self.show_hints:
+            return
+        for side in ("A", "B"):
+            nodes = [str(n) for n in options.get(side, [])]
+            if not nodes:
+                continue
+            heading = ttk.Label(self._chip_frame, text=f"{side} replies:")
+            heading.pack(side="left", padx=(0, 6))
+            for node in nodes:
+                key = f"{side}:{node}"
+                btn = ttk.Button(
+                    self._chip_frame,
+                    text=node,
+                    command=lambda s=side, n=node: self._handle_chip_click(s, n),
+                    style="Accent.TButton",
+                )
+                btn.pack(side="left", padx=2, pady=2)
+                self._chip_buttons[key] = btn
+
+    # Interaction -----------------------------------------------------------------
+    def _on_configure(self, _event: tk.Event) -> None:
+        self.redraw()
+
+    def _on_pan_start(self, event: tk.Event) -> None:
         self._pan_start = (event.x, event.y)
 
-    def _pan(self, event: tk.Event) -> None:
+    def _on_pan_drag(self, event: tk.Event) -> None:
         if self._pan_start is None:
             return
         dx = event.x - self._pan_start[0]
@@ -238,37 +355,49 @@ class GraphCanvas(tk.Canvas):
         self._pan_start = (event.x, event.y)
         self.redraw()
 
-    def _zoom(self, event: tk.Event) -> None:
-        delta: float
+    def _on_pan_end(self, _event: tk.Event) -> None:
+        self._pan_start = None
+
+    def _on_zoom(self, event: tk.Event) -> None:
+        ctrl_down = getattr(event, "state", 0) & 0x0004
+        if not ctrl_down and getattr(event, "delta", 0) and event.widget == self:
+            # Only zoom on Ctrl+wheel for standard mouse wheel
+            return
         if getattr(event, "delta", 0):
-            delta = 1.1 if event.delta > 0 else 0.9
+            direction = 1 if event.delta > 0 else -1
         elif getattr(event, "num", None) in (4, 5):
-            delta = 1.1 if event.num == 4 else 0.9
+            direction = 1 if event.num == 4 else -1
         else:
             return
-        self.scale_factor *= delta
-        self.scale_factor = max(0.4, min(2.5, self.scale_factor))
+        factor = 1.1 if direction > 0 else 0.9
+        self.scale_factor = max(0.4, min(2.5, self.scale_factor * factor))
         self.redraw()
 
-    def _click(self, event: tk.Event) -> None:
-        item = self.find_closest(event.x, event.y)
+    def _on_click(self, event: tk.Event) -> None:
+        item = self.find_withtag("current")
         if not item:
             return
         node = self.node_items.get(item[0])
         if node and self.on_node_click:
             self.on_node_click(*node)
 
-    # Layout + drawing
+    def _handle_chip_click(self, side: str, node: str) -> None:
+        if self.on_node_click:
+            self.on_node_click(side, node)
+
+    # Layout & drawing ------------------------------------------------------------
     def _compute_layout(self, graph: DiGraph) -> LayoutState:
         positions: Dict[str, Tuple[float, float]] = {}
         velocities: Dict[str, Tuple[float, float]] = {}
-        n = max(len(graph.succ), 1)
+        nodes = sorted(graph.succ.keys())
+        count = max(len(nodes), 1)
         radius = 160
-        for i, node in enumerate(sorted(graph.succ)):
-            angle = 2 * math.pi * i / n
+        for index, node in enumerate(nodes):
+            angle = 2 * math.pi * index / count
             positions[node] = (math.cos(angle) * radius, math.sin(angle) * radius)
             velocities[node] = (0.0, 0.0)
-        for _ in range(15):
+        # Simple force-directed relaxation
+        for _ in range(20):
             forces = {v: [0.0, 0.0] for v in positions}
             for u in positions:
                 for v in positions:
@@ -277,7 +406,7 @@ class GraphCanvas(tk.Canvas):
                     dx = positions[u][0] - positions[v][0]
                     dy = positions[u][1] - positions[v][1]
                     dist_sq = dx * dx + dy * dy + 0.01
-                    rep = 20000 / dist_sq
+                    rep = 16000 / dist_sq
                     forces[u][0] += dx * rep
                     forces[u][1] += dy * rep
             for u, vs in graph.succ.items():
@@ -286,15 +415,15 @@ class GraphCanvas(tk.Canvas):
                         continue
                     dx = positions[v][0] - positions[u][0]
                     dy = positions[v][1] - positions[u][1]
-                    attr = 0.01
+                    attr = 0.02
                     forces[u][0] += dx * attr
                     forces[u][1] += dy * attr
                     forces[v][0] -= dx * attr
                     forces[v][1] -= dy * attr
             for node in positions:
                 vx, vy = velocities[node]
-                vx = (vx + forces[node][0]) * 0.85
-                vy = (vy + forces[node][1]) * 0.85
+                vx = (vx + forces[node][0]) * 0.82
+                vy = (vy + forces[node][1]) * 0.82
                 x, y = positions[node]
                 positions[node] = (x + vx * 0.01, y + vy * 0.01)
                 velocities[node] = (vx, vy)
@@ -303,39 +432,50 @@ class GraphCanvas(tk.Canvas):
     def redraw(self) -> None:
         self.delete("all")
         self.node_items.clear()
+        self.node_colors.clear()
         self.edge_colors.clear()
+        self._halo_items.clear()
+        self._pv_items.clear()
+
         if not self.graph_a or not self.graph_b:
             return
-        palette = {"A": "#4cc9f0", "B": "#f07167"}
-        width = self.winfo_width() or 800
-        height = self.winfo_height() or 600
+
+        width = max(self.winfo_width(), 1)
+        height = max(self.winfo_height(), 1)
+        _draw_background(self, width, height)
+
         mid_x = width / 2
         mid_y = height / 2
-        offset_x = self.offset[0]
-        offset_y = self.offset[1]
-        for side, graph, layout in (("A", self.graph_a, self.layout.get("A")), ("B", self.graph_b, self.layout.get("B"))):
+        offset_x, offset_y = self.offset
+        scale = self.scale_factor
+        node_radius = NODE_R * scale
+        arrowshape = tuple(max(4, int(s * scale)) for s in ARROWSHAPE)
+        edge_width = max(1.2, EDGE_WIDTH * scale)
+
+        palettes = {"A": COL_NODE_A, "B": COL_NODE_B}
+        current_nodes = {"A": self.position.A_curr, "B": self.position.B_curr}
+        hints_map = {
+            "A": set(self.hints_a if self.show_hints else []),
+            "B": set(self.hints_b if self.show_hints else []),
+        }
+
+        def project(px: float, py: float, *, side: str) -> Tuple[float, float]:
+            cx = mid_x * 0.5 if side == "A" else mid_x * 1.5
+            return (
+                cx + (px + offset_x) * scale,
+                mid_y + (py + offset_y) * scale,
+            )
+
+        # Draw edges for both graphs
+        for side, graph in (("A", self.graph_a), ("B", self.graph_b)):
+            layout = self.layout.get(side)
             if layout is None:
                 continue
-            cx = mid_x / 2 if side == "A" else mid_x + mid_x / 2
-            cy = mid_y
-            raw_hints = self.hints_a if side == "A" else self.hints_b
-            hints = set(raw_hints if self.show_hints else [])
-            current = self.position.A_curr if side == "A" else self.position.B_curr
+            current = current_nodes.get(side)
             forward_targets = set(graph.succ.get(current, set())) if current else set()
             backward_sources = set(graph.pred.get(current, set())) if current else set()
+            hints = hints_map[side]
             jump_targets = {h for h in hints if h not in forward_targets and h not in backward_sources}
-            width_scale = max(0.6, min(1.6, self.scale_factor))
-            edge_width = EDGE_WIDTH * width_scale
-            node_radius = NODE_R * self.scale_factor
-            arrowshape = tuple(max(4, int(s * width_scale)) for s in ARROWSHAPE)
-
-            def project(px: float, py: float) -> Tuple[float, float]:
-                return (
-                    cx + (px + offset_x) * self.scale_factor,
-                    cy + (py + offset_y) * self.scale_factor,
-                )
-
-            # Draw edges first
             for u, vs in graph.succ.items():
                 if u not in layout.positions:
                     continue
@@ -344,16 +484,16 @@ class GraphCanvas(tk.Canvas):
                         continue
                     x1_raw, y1_raw = layout.positions[u]
                     x2_raw, y2_raw = layout.positions[v]
-                    x1, y1 = project(x1_raw, y1_raw)
-                    x2, y2 = project(x2_raw, y2_raw)
+                    x1, y1 = project(x1_raw, y1_raw, side=side)
+                    x2, y2 = project(x2_raw, y2_raw, side=side)
                     tags = (f"edge:{side}:{u}->{v}",)
-                    color = EDGE_COLOR
+                    color = EDGE_COLOR or COL_EDGE
                     if current:
                         if u == current and v in forward_targets:
                             color = EDGE_FORWARD
                         elif v == current and u in backward_sources:
                             color = EDGE_BACKWARD
-                    if v in jump_targets and u == current:
+                    if u == current and v in jump_targets:
                         color = EDGE_JUMP
                     if u == v:
                         item = _draw_self_loop(
@@ -368,7 +508,7 @@ class GraphCanvas(tk.Canvas):
                         )
                     else:
                         reverse = u in graph.pred.get(v, set())
-                        offset = _curve_offset(u, v, mag=18.0) * self.scale_factor
+                        offset = _curve_offset(u, v, mag=18.0) * scale
                         item = _draw_directed_edge(
                             self,
                             x1,
@@ -384,40 +524,163 @@ class GraphCanvas(tk.Canvas):
                             tags=tags,
                         )
                     self.edge_colors[item] = color
-            self.tag_lower("edge")
+        self.tag_lower("edge")
 
-            pv_nodes = {(m.side, m.dest) for m in self.pv} if self.show_pv else set()
-            for node, (x, y) in layout.positions.items():
-                px, py = project(x, y)
-                r = node_radius
-                fill = palette[side]
-                if (side, node) in pv_nodes:
-                    self.create_oval(px - r - 4, py - r - 4, px + r + 4, py + r + 4, outline="#9bf6ff", width=3)
+        # Draw PV overlay after base edges
+        if self.show_pv and self.pv:
+            pv_positions = {"A": self.position.A_curr, "B": self.position.B_curr}
+            for move in self.pv:
+                source = pv_positions.get(move.side)
+                if not source:
+                    continue
+                graph = self.graph_a if move.side == "A" else self.graph_b
+                layout = self.layout.get(move.side)
+                if layout is None:
+                    continue
+                if source not in layout.positions or move.dest not in layout.positions:
+                    pv_positions[move.side] = move.dest
+                    continue
+                x1_raw, y1_raw = layout.positions[source]
+                x2_raw, y2_raw = layout.positions[move.dest]
+                x1, y1 = project(x1_raw, y1_raw, side=move.side)
+                x2, y2 = project(x2_raw, y2_raw, side=move.side)
+                reverse = source in graph.pred.get(move.dest, set()) and source != move.dest
+                offset = _curve_offset(source, move.dest, mag=22.0) * scale if reverse else 0.0
+                item = _draw_directed_edge(
+                    self,
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    color=COL_PV_EDGE,
+                    width=edge_width * 2.0,
+                    curved=reverse,
+                    offset=offset,
+                    node_radius=node_radius,
+                    arrowshape=arrowshape,
+                    tags=("pv",),
+                )
+                self._pv_items.append(item)
+                pv_positions[move.side] = move.dest
+
+        # Draw nodes
+        for side, graph in (("A", self.graph_a), ("B", self.graph_b)):
+            layout = self.layout.get(side)
+            if layout is None:
+                continue
+            current = current_nodes.get(side)
+            hints = hints_map[side]
+            base_fill = palettes[side]
+            for node, (x_raw, y_raw) in layout.positions.items():
+                px, py = project(x_raw, y_raw, side=side)
+                heat = self._heat_intensity(side, node)
+                fill = _lerp_hex(base_fill, COL_HEAT_HIGH, heat) if heat > 0 else base_fill
+                shadow = self.create_oval(
+                    px - node_radius + 3,
+                    py - node_radius + 3,
+                    px + node_radius + 3,
+                    py + node_radius + 3,
+                    fill="#000000",
+                    outline="",
+                    stipple="gray50",
+                    tags=("shadow",),
+                )
+                self.tag_lower(shadow)
                 if node == current:
-                    self.create_oval(px - r - 6, py - r - 6, px + r + 6, py + r + 6, outline="#3a86ff", width=4)
-                if node in hints:
-                    self.create_oval(
-                        px - r - 10,
-                        py - r - 10,
-                        px + r + 10,
-                        py + r + 10,
-                        outline="#80ed99",
-                        width=2,
-                        dash=(4, 2),
+                    halo = self.create_oval(
+                        px - node_radius - 8,
+                        py - node_radius - 8,
+                        px + node_radius + 8,
+                        py + node_radius + 8,
+                        outline=COL_NODE_CURR,
+                        width=4,
+                        tags=("current_glow",),
                     )
-                intensity = self._heat_intensity(side, node)
-                color = self._blend(fill, "#ffffff", intensity)
-                item = self.create_oval(px - r, py - r, px + r, py + r, fill=color, outline="#000")
-                self.node_items[item] = (side, node)
-                self.create_text(px, py, text=node, fill="#fff", font=("Helvetica", int(10 * max(0.6, self.scale_factor))))
+                    self._halo_items[halo] = (side, node)
+                if node in hints:
+                    halo = self.create_oval(
+                        px - node_radius - 12,
+                        py - node_radius - 12,
+                        px + node_radius + 12,
+                        py + node_radius + 12,
+                        outline=COL_HINT_HALO,
+                        width=3,
+                        dash=(6, 4),
+                        tags=("halo", f"halo:{side}:{node}"),
+                    )
+                    self._halo_items[halo] = (side, node)
+                node_item = self.create_oval(
+                    px - node_radius,
+                    py - node_radius,
+                    px + node_radius,
+                    py + node_radius,
+                    fill=fill,
+                    outline="#111827",
+                    width=2,
+                    tags=("node", f"node:{side}:{node}"),
+                )
+                self.node_items[node_item] = (side, node)
+                self.node_colors[node_item] = fill
+                self.tag_raise(node_item)
+                # Label with shadow
+                font_size = int(10 * max(0.6, scale))
+                self.create_text(
+                    px + 1,
+                    py + 1,
+                    text=str(node),
+                    fill=COL_LABEL_SHADOW,
+                    font=("Helvetica", font_size, "bold"),
+                    tags=("label",),
+                )
+                self.create_text(
+                    px,
+                    py,
+                    text=str(node),
+                    fill=COL_LABEL,
+                    font=("Helvetica", font_size, "bold"),
+                    tags=("label",),
+                )
 
+        self.render_hint_chips({"A": self.hints_a, "B": self.hints_b})
+
+    # Animation -------------------------------------------------------------------
+    def _start_animation(self) -> None:
+        if self._animation_job is None:
+            self._animation_job = self.after(PULSE_INTERVAL_MS, self._tick)
+
+    def _tick(self) -> None:
+        self._animation_job = None
+        self._pulse_phase = (self._pulse_phase + PULSE_SPEED) % (2 * math.pi)
+        self._pv_phase = (self._pv_phase + PV_SPEED) % 12.0
+        self._animate_halos()
+        self._animate_pv()
+        self._start_animation()
+
+    def _animate_halos(self) -> None:
+        if not self._halo_items:
+            return
+        pulse = (math.sin(self._pulse_phase) + 1) / 2
+        color = _lerp_hex(COL_HINT_HALO, "#ffffff", pulse * 0.35)
+        for halo_id in list(self._halo_items):
+            if self.type(halo_id):
+                self.itemconfigure(halo_id, outline=color)
+
+    def _animate_pv(self) -> None:
+        if not self._pv_items:
+            return
+        dash_offset = self._pv_phase
+        for item in self._pv_items:
+            if self.type(item):
+                self.itemconfigure(item, dash=(10, 6), dashoffset=dash_offset)
+
+    # Hover effects ---------------------------------------------------------------
     def _on_edge_enter(self, event: tk.Event) -> None:
         iid = event.widget.find_withtag("current")
         if not iid:
             return
         item_id = iid[0]
-        base = self.edge_colors.get(item_id, EDGE_COLOR)
-        highlight = self._blend(base, "#ddeeff", 0.35)
+        base = self.edge_colors.get(item_id, COL_EDGE)
+        highlight = _lerp_hex(base, COL_EDGE_HOVER, 0.5)
         event.widget.itemconfigure(item_id, fill=highlight)
 
     def _on_edge_leave(self, event: tk.Event) -> None:
@@ -425,9 +688,29 @@ class GraphCanvas(tk.Canvas):
         if not iid:
             return
         item_id = iid[0]
-        base = self.edge_colors.get(item_id, EDGE_COLOR)
+        base = self.edge_colors.get(item_id, COL_EDGE)
         event.widget.itemconfigure(item_id, fill=base)
 
+    def _on_node_enter(self, event: tk.Event) -> None:
+        iid = event.widget.find_withtag("current")
+        if not iid:
+            return
+        item_id = iid[0]
+        base = self.node_colors.get(item_id)
+        if base:
+            highlight = _lerp_hex(base, "#ffffff", 0.35)
+            event.widget.itemconfigure(item_id, fill=highlight)
+
+    def _on_node_leave(self, event: tk.Event) -> None:
+        iid = event.widget.find_withtag("current")
+        if not iid:
+            return
+        item_id = iid[0]
+        base = self.node_colors.get(item_id)
+        if base:
+            event.widget.itemconfigure(item_id, fill=base)
+
+    # Heat helpers ----------------------------------------------------------------
     def _heat_intensity(self, side: str, node: str) -> float:
         if not self.heatmap:
             return 0.0
@@ -436,18 +719,9 @@ class GraphCanvas(tk.Canvas):
             return 0.0
         return self.heatmap.get((side, node), 0) / total
 
-    @staticmethod
-    def _blend(color1: str, color2: str, t: float) -> str:
-        def to_rgb(hex_color: str) -> Tuple[int, int, int]:
-            hex_color = hex_color.lstrip("#")
-            return tuple(int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
-
-        def to_hex(rgb: Tuple[int, int, int]) -> str:
-            return "#" + "".join(f"{c:02x}" for c in rgb)
-
-        r1, g1, b1 = to_rgb(color1)
-        r2, g2, b2 = to_rgb(color2)
-        r = int(r1 + (r2 - r1) * t)
-        g = int(g1 + (g2 - g1) * t)
-        b = int(b1 + (b2 - b1) * t)
-        return to_hex((r, g, b))
+    # Cleanup ---------------------------------------------------------------------
+    def destroy(self) -> None:  # pragma: no cover - Tk teardown
+        if self._animation_job is not None:
+            self.after_cancel(self._animation_job)
+            self._animation_job = None
+        super().destroy()
