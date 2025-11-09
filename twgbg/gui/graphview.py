@@ -167,6 +167,8 @@ class GraphCanvas(tk.Canvas):
         self.hints_b: List[str] = []
         self.pv: List[Move] = []
         self.heatmap: Dict[Tuple[str, str], int] = {}
+        self.show_hints = True
+        self.show_pv = True
         self.layout: Dict[str, LayoutState] = {}
         self.node_items: Dict[int, Tuple[str, str]] = {}
         self.edge_colors: Dict[int, str] = {}
@@ -176,6 +178,8 @@ class GraphCanvas(tk.Canvas):
         self.bind("<B2-Motion>", self._pan)
         self.bind("<MouseWheel>", self._zoom)
         self.bind("<Control-MouseWheel>", self._zoom)
+        self.bind("<Button-4>", self._zoom)
+        self.bind("<Button-5>", self._zoom)
         self.bind("<Button-1>", self._click)
         self.tag_bind("edge", "<Enter>", self._on_edge_enter)
         self.tag_bind("edge", "<Leave>", self._on_edge_leave)
@@ -209,6 +213,15 @@ class GraphCanvas(tk.Canvas):
         self.heatmap = heatmap
         self.redraw()
 
+    def set_overlays(self, *, hints: Optional[bool] = None, pv: Optional[bool] = None) -> None:
+        """Toggle visibility of hint halos and principal variation overlays."""
+
+        if hints is not None:
+            self.show_hints = hints
+        if pv is not None:
+            self.show_pv = pv
+        self.redraw()
+
     def set_click_callback(self, callback: Callable[[str, str], None]) -> None:
         self.on_node_click = callback
 
@@ -226,7 +239,13 @@ class GraphCanvas(tk.Canvas):
         self.redraw()
 
     def _zoom(self, event: tk.Event) -> None:
-        delta = 1.1 if event.delta > 0 else 0.9
+        delta: float
+        if getattr(event, "delta", 0):
+            delta = 1.1 if event.delta > 0 else 0.9
+        elif getattr(event, "num", None) in (4, 5):
+            delta = 1.1 if event.num == 4 else 0.9
+        else:
+            return
         self.scale_factor *= delta
         self.scale_factor = max(0.4, min(2.5, self.scale_factor))
         self.redraw()
@@ -299,7 +318,8 @@ class GraphCanvas(tk.Canvas):
                 continue
             cx = mid_x / 2 if side == "A" else mid_x + mid_x / 2
             cy = mid_y
-            hints = set(self.hints_a if side == "A" else self.hints_b)
+            raw_hints = self.hints_a if side == "A" else self.hints_b
+            hints = set(raw_hints if self.show_hints else [])
             current = self.position.A_curr if side == "A" else self.position.B_curr
             forward_targets = set(graph.succ.get(current, set())) if current else set()
             backward_sources = set(graph.pred.get(current, set())) if current else set()
@@ -366,7 +386,7 @@ class GraphCanvas(tk.Canvas):
                     self.edge_colors[item] = color
             self.tag_lower("edge")
 
-            pv_nodes = {(m.side, m.dest) for m in self.pv}
+            pv_nodes = {(m.side, m.dest) for m in self.pv} if self.show_pv else set()
             for node, (x, y) in layout.positions.items():
                 px, py = project(x, y)
                 r = node_radius

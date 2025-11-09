@@ -49,12 +49,30 @@ class HintPanel(ttk.Frame):
     def __init__(self, master: tk.Widget) -> None:
         super().__init__(master)
         self.hints_var = tk.StringVar(value="")
+        self.enabled = True
+        self._last_replies: Dict[str, str] = {}
         ttk.Label(self, text="Legal replies").pack(anchor="w")
         self.label = ttk.Label(self, textvariable=self.hints_var, wraplength=180)
         self.label.pack(fill="x")
 
     def update_hints(self, replies: Dict[str, str]) -> None:
-        if not replies:
-            self.hints_var.set("No legal replies")
+        self._last_replies = dict(replies)
+        self._apply_hint_text()
+
+    def set_enabled(self, enabled: bool) -> None:
+        self.enabled = enabled
+        if enabled:
+            self.label.state(["!disabled"])
         else:
-            self.hints_var.set(", ".join(f"{k}: {v}" for k, v in replies.items()))
+            self.label.state(["disabled"])
+        self._apply_hint_text()
+
+    def _apply_hint_text(self) -> None:
+        if not self.enabled:
+            self.hints_var.set("Hints hidden")
+            return
+        if not self._last_replies:
+            self.hints_var.set("No legal replies")
+            return
+        parts = [f"{k}: {v}" for k, v in self._last_replies.items()]
+        self.hints_var.set(", ".join(parts))
