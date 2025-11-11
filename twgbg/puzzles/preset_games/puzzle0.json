@@ -1,0 +1,5 @@
+{
+  "A": "twgbg/data/sample_graphs/graph0.json",
+  "B": "twgbg/data/sample_graphs/graph1.json",
+  "start": {"A": "A0", "B": "A0"}
+}

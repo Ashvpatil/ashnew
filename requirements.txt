@@ -1,0 +1,4 @@
+# Core dependencies
+
+# Tkinter ships with Python, no external GUI packages required
+z3-solver; platform_python_implementation == 'CPython'
