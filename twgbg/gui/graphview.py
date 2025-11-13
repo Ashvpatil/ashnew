@@ -47,10 +47,18 @@ def _lerp(a: float, b: float, t: float) -> float:
 
 
 def _lerp_hex(color_a: str, color_b: str, t: float) -> str:
-    """Blend two hex colours."""
+    """Blend two hex colours, supporting both 3- and 6-digit inputs."""
 
-    a = color_a.lstrip("#")
-    b = color_b.lstrip("#")
+    def _expand(color: str) -> str:
+        hex_part = color.lstrip("#")
+        if len(hex_part) == 3:
+            hex_part = "".join(ch * 2 for ch in hex_part)
+        if len(hex_part) != 6:
+            raise ValueError(f"Unsupported hex colour: {color!r}")
+        return hex_part
+
+    a = _expand(color_a)
+    b = _expand(color_b)
     ra, ga, ba = int(a[0:2], 16), int(a[2:4], 16), int(a[4:6], 16)
     rb, gb, bb = int(b[0:2], 16), int(b[2:4], 16), int(b[4:6], 16)
     r = int(_lerp(ra, rb, t))
