@@ -1,0 +1,44 @@
+{
+  "graph_a": {
+    "name": "Sample A",
+    "vertices": [
+      {
+        "id": "0",
+        "label": "s0"
+      },
+      {
+        "id": "1",
+        "label": "s1"
+      }
+    ],
+    "edges": [
+      [
+        "0",
+        "1"
+      ],
+      [
+        "1",
+        "0"
+      ]
+    ]
+  },
+  "graph_b": {
+    "name": "Sample B",
+    "vertices": [
+      {
+        "id": "0",
+        "label": "t0"
+      },
+      {
+        "id": "1",
+        "label": "t1"
+      }
+    ],
+    "edges": [
+      [
+        "0",
+        "1"
+      ]
+    ]
+  }
+}
