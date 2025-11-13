@@ -1,0 +1,8 @@
+{
+  "A": "sample_graphs/sample_5.json",
+  "B": "sample_graphs/sample_6.json",
+  "start": {
+    "A": "N1",
+    "B": "N1"
+  }
+}

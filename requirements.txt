@@ -1,0 +1,3 @@
+# Core functionality relies on the Python standard library.
+# Optional extras:
+z3-solver ; extra == "z3"
