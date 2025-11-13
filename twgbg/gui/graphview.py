@@ -443,6 +443,8 @@ class GraphCanvas(tk.Canvas):
         width = max(self.winfo_width(), 1)
         height = max(self.winfo_height(), 1)
         _draw_background(self, width, height)
+        # Ensure the gradient background stays behind subsequent drawings.
+        self.tag_lower("background")
 
         mid_x = width / 2
         mid_y = height / 2
@@ -524,7 +526,6 @@ class GraphCanvas(tk.Canvas):
                             tags=tags,
                         )
                     self.edge_colors[item] = color
-        self.tag_lower("edge")
 
         # Draw PV overlay after base edges
         if self.show_pv and self.pv:
