@@ -3,10 +3,18 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Sequence
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set
 
 from PyQt5.QtCore import QEasingCurve, QPointF, QRectF, Qt, QVariantAnimation
-from PyQt5.QtGui import QBrush, QColor, QPainter, QPen, QPixmap, QPainterPath
+from PyQt5.QtGui import (
+    QBrush,
+    QColor,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+    QPolygonF,
+)
 from PyQt5.QtWidgets import (
     QGraphicsDropShadowEffect,
     QGraphicsEllipseItem,
@@ -29,6 +37,52 @@ class NodeState:
     item: QGraphicsEllipseItem
     label: QGraphicsSimpleTextItem
     halo: QGraphicsEllipseItem
+    current_ring: QGraphicsEllipseItem
+
+
+class ArrowPathItem(QGraphicsPathItem):
+    """Edge with an arrow head rendered at its end."""
+
+    def __init__(self, palette: Palette) -> None:
+        super().__init__()
+        self.palette = palette
+        self.arrow_head = QPolygonF()
+        pen = QPen(self.palette.text_muted, 1.8)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        self.setPen(pen)
+        self.setZValue(1)
+        self._show_arrow = True
+
+    def update_geometry(self, path: QPainterPath, show_arrow: bool = True) -> None:
+        self.setPath(path)
+        self._show_arrow = show_arrow
+        if not show_arrow:
+            self.arrow_head = QPolygonF()
+            return
+        if path.elementCount() < 2:
+            self.arrow_head = QPolygonF()
+            return
+        end_point = path.pointAtPercent(1.0)
+        angle = math.radians(-path.angleAtPercent(1.0))
+        arrow_size = 12.0
+        left = end_point + QPointF(
+            math.sin(angle + math.pi / 3) * arrow_size,
+            math.cos(angle + math.pi / 3) * arrow_size,
+        )
+        right = end_point + QPointF(
+            math.sin(angle - math.pi / 3) * arrow_size,
+            math.cos(angle - math.pi / 3) * arrow_size,
+        )
+        self.arrow_head = QPolygonF([end_point, left, right])
+
+    def paint(self, painter, option, widget=None):  # pragma: no cover - GUI rendering
+        super().paint(painter, option, widget)
+        if self.arrow_head.isEmpty() or not self._show_arrow:
+            return
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(self.pen().color())
+        painter.drawPolygon(self.arrow_head)
 
 
 class GraphScene(QGraphicsScene):
@@ -37,9 +91,10 @@ class GraphScene(QGraphicsScene):
         self.graph = graph
         self.palette = palette
         self.node_items: Dict[str, NodeState] = {}
-        self.edge_items: Dict[tuple, QGraphicsPathItem] = {}
+        self.edge_items: Dict[tuple, ArrowPathItem] = {}
         self.pv_items: List[QGraphicsPathItem] = []
         self.animations: List[QVariantAnimation] = []
+        self.current_vertices: Set[str] = set()
         self.setBackgroundBrush(QBrush(self.palette.background))
         self._build_scene()
 
@@ -81,11 +136,17 @@ class GraphScene(QGraphicsScene):
         halo.setOpacity(0.0)
         halo.setZValue(3)
 
+        current_ring = QGraphicsEllipseItem(-32, -32, 64, 64, ellipse)
+        current_ring.setBrush(QBrush(Qt.NoBrush))
+        current_ring.setPen(QPen(self.palette.success, 3))
+        current_ring.setOpacity(0.0)
+        current_ring.setZValue(2.5)
+
         tooltip = self._tooltip(vertex)
         ellipse.setToolTip(tooltip)
         self.addItem(ellipse)
         ellipse.setPos(pos)
-        self.node_items[vertex] = NodeState(pos, ellipse, label, halo)
+        self.node_items[vertex] = NodeState(pos, ellipse, label, halo, current_ring)
 
     def _tooltip(self, vertex: str) -> str:
         meta = self.graph.metadata(vertex)
@@ -100,10 +161,10 @@ class GraphScene(QGraphicsScene):
     def _create_edge(self, u: str, v: str) -> None:
         source = self.node_items[u].position
         target = self.node_items[v].position
-        path_item = QGraphicsPathItem()
-        path_item.setZValue(1)
-        path_item.setPen(QPen(self.palette.text_muted, 1.8))
-        path_item.setPath(self._edge_path(source, target))
+        path_item = ArrowPathItem(self.palette)
+        path = self._edge_path(source, target)
+        show_arrow = source != target
+        path_item.update_geometry(path, show_arrow=show_arrow)
         self.addItem(path_item)
         self.edge_items[(u, v)] = path_item
 
@@ -114,7 +175,9 @@ class GraphScene(QGraphicsScene):
             return
         source = self.node_items[u].position
         target = self.node_items[v].position
-        self.edge_items[(u, v)].setPath(self._edge_path(source, target))
+        path = self._edge_path(source, target)
+        show_arrow = source != target
+        self.edge_items[(u, v)].update_geometry(path, show_arrow=show_arrow)
 
     def _edge_path(self, source: QPointF, target: QPointF):
         path = QPainterPath(source)
@@ -200,6 +263,16 @@ class GraphScene(QGraphicsScene):
                 anim.start()
                 self.animations.append(anim)
 
+    def set_current_vertices(self, vertices: Iterable[str]) -> None:
+        self.current_vertices = {str(v) for v in vertices}
+        for vertex, state in self.node_items.items():
+            is_current = vertex in self.current_vertices
+            state.current_ring.setOpacity(0.85 if is_current else 0.0)
+            if is_current:
+                state.item.setBrush(QBrush(self.palette.surface_alt))
+            elif vertex not in self.current_vertices:
+                state.item.setBrush(QBrush(self.palette.surface))
+
     def _clear_animations(self) -> None:
         for anim in self.animations:
             anim.stop()
@@ -238,10 +311,14 @@ class GraphScene(QGraphicsScene):
             color = QColor(self.palette.accent)
             color.setAlphaF(0.35 + 0.65 * (weight / maximum))
             state.item.setBrush(QBrush(color))
+            if vertex in self.current_vertices:
+                state.current_ring.setOpacity(0.9)
 
     def reset_colours(self) -> None:
         for state in self.node_items.values():
             state.item.setBrush(QBrush(self.palette.surface))
+            state.current_ring.setOpacity(0.0)
+        self.set_current_vertices(self.current_vertices)
 
     def set_palette(self, palette: Palette) -> None:
         self.palette = palette
@@ -251,9 +328,11 @@ class GraphScene(QGraphicsScene):
             state.item.setPen(QPen(self.palette.accent, 2.5))
             state.label.setBrush(QBrush(self.palette.text))
             state.halo.setPen(QPen(self.palette.accent_alt, 3, Qt.DashLine))
+            state.current_ring.setPen(QPen(self.palette.success, 3))
         for edge in self.edge_items.values():
             edge.setPen(QPen(self.palette.text_muted, 1.8))
         self.show_pv([])
+        self.set_current_vertices(self.current_vertices)
 
     # ------------------------------------------------------------------
     def export_png(self, path: str) -> None:
@@ -279,11 +358,28 @@ class GraphView(QGraphicsView):
         self.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
         self.zoom_factor = 1.18
         self.current_palette = DARK_PALETTE
+        self.select_callback: Optional[Callable[[str], None]] = None
 
     # ------------------------------------------------------------------
     def wheelEvent(self, event):  # pragma: no cover - GUI interaction
         factor = self.zoom_factor if event.angleDelta().y() > 0 else 1 / self.zoom_factor
         self.scale(factor, factor)
+
+    def mousePressEvent(self, event):  # pragma: no cover - GUI interaction
+        handled = False
+        if event.button() == Qt.LeftButton and self.select_callback:
+            item = self.itemAt(event.pos())
+            if item is not None:
+                target_item = item
+                if target_item.parentItem() is not None:
+                    target_item = target_item.parentItem()
+                for vertex, state in self.graph_scene.node_items.items():
+                    if target_item is state.item:
+                        self.select_callback(vertex)
+                        handled = True
+                        break
+        if not handled:
+            super().mousePressEvent(event)
 
     def centre_on(self, vertex: str) -> None:
         vertex_id = str(vertex)
@@ -324,6 +420,9 @@ class GraphView(QGraphicsView):
     def clear_heatmap(self) -> None:
         self.graph_scene.reset_colours()
 
+    def set_current(self, vertices: Iterable[str]) -> None:
+        self.graph_scene.set_current_vertices(vertices)
+
     def set_palette(self, palette: Palette) -> None:
         self.current_palette = palette
         self.graph_scene.set_palette(palette)
@@ -338,3 +437,6 @@ class GraphView(QGraphicsView):
 
     def export_png(self, path: str) -> None:
         self.graph_scene.export_png(path)
+
+    def set_select_callback(self, callback: Optional[Callable[[str], None]]) -> None:
+        self.select_callback = callback

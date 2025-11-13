@@ -207,4 +207,7 @@ class HintPanel(QGroupBox):
             self.buttons.append(button)
 
     def clear(self) -> None:
-        self.update_hints([], lambda _: None)
+        for button in self.buttons:
+            button.deleteLater()
+        self.buttons.clear()
+        self.summary.setText("Awaiting Spoiler move – press Space")

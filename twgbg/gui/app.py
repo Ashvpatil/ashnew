@@ -5,7 +5,7 @@ import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QIcon, QKeySequence
@@ -185,6 +185,7 @@ class PlayTab(QWidget):
         self.thread: Optional[QThread] = None
         self.current_responses: List[Move] = []
         self._build_ui()
+        self._update_current_vertices()
 
     def _build_ui(self) -> None:
         layout = QGridLayout(self)
@@ -237,6 +238,9 @@ class PlayTab(QWidget):
         self.splitter.insertWidget(1, self.view_b)
         self.hint_panel.clear()
         self.current_responses = []
+        self.view_a.set_select_callback(None)
+        self.view_b.set_select_callback(None)
+        self._update_current_vertices()
 
     def request_spoiler_move(self) -> None:
         if self.thread and self.thread.isRunning():
@@ -269,6 +273,12 @@ class PlayTab(QWidget):
         self.view_b.animate_move(move)
         self.view_a.centre_on(self.state.position.vertex_a)
         self.view_b.centre_on(self.state.position.vertex_b)
+        if move.graph == "A":
+            self.view_a.set_current([move.target])
+            self.view_b.set_current([self.state.position.vertex_b])
+        else:
+            self.view_b.set_current([move.target])
+            self.view_a.set_current([self.state.position.vertex_a])
         if self.overlay_panel.overlay_state()["pv"]:
             target_view = self.view_a if move.graph == "A" else self.view_b
             target_view.set_pv([move.source] + payload["pv"])
@@ -281,6 +291,8 @@ class PlayTab(QWidget):
         target_view.show_hints(hint_vertices)
         other_view = self.view_a if move.graph == "A" else self.view_b
         other_view.clear_hints()
+        self._set_graph_selection(target_view, responses)
+        other_view.set_select_callback(None)
         commentary = f"Spoiler plays {move.move_type} on graph {move.graph}, leaving {len(responses)} replies."
         self.commentary_ready.emit(commentary, payload.get("alternatives", []))
         self.spoiler_move.emit(move)
@@ -306,7 +318,11 @@ class PlayTab(QWidget):
         self.view_a.clear_hints()
         self.view_b.clear_hints()
         self.hint_panel.clear()
+        self.view_a.set_select_callback(None)
+        self.view_b.set_select_callback(None)
+        self.current_responses = []
         self.duplicator_move.emit(move)
+        self._update_current_vertices()
         if not alive:
             if info.get("duplicator_survives"):
                 QMessageBox.information(self, "Round limit", "Duplicator survives the set round limit!")
@@ -342,6 +358,25 @@ class PlayTab(QWidget):
         self.view_b.set_high_contrast(state["high_contrast"])
         self.view_a.set_colorblind_safe(state["colorblind"])
         self.view_b.set_colorblind_safe(state["colorblind"])
+
+    def _update_current_vertices(self) -> None:
+        self.view_a.set_current([self.state.position.vertex_a])
+        self.view_b.set_current([self.state.position.vertex_b])
+
+    def _set_graph_selection(self, view: GraphView, responses: Iterable[Move]) -> None:
+        response_map: Dict[str, Move] = {}
+        for move in responses:
+            response_map[str(move.target)] = move
+
+        def choose(vertex: str) -> None:
+            move = response_map.get(str(vertex))
+            if move:
+                self.duplicator_select(move)
+
+        view.set_select_callback(choose)
+
+    def sync_position(self) -> None:
+        self._update_current_vertices()
 
 
 class AnalysisTab(QWidget):
@@ -488,6 +523,7 @@ class MainWindow(QMainWindow):
         self.state.history.clear()
         self.state.replies.clear()
         self.play_tab.reset_graphs(self.state.graph_a, self.state.graph_b)
+        self.play_tab.sync_position()
         self.statusBar().showMessage("Loaded sample puzzle")
 
     def save_session(self) -> None:
@@ -520,6 +556,7 @@ class MainWindow(QMainWindow):
         self.state.stack = [self.state.position]
         self.state.redo_stack.clear()
         self.statusBar().showMessage("Session loaded")
+        self.play_tab.sync_position()
 
     def export_png(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Export PNG", filter="PNG (*.png)")
@@ -542,6 +579,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Undo")
             self.play_tab.view_a.centre_on(pos.vertex_a)
             self.play_tab.view_b.centre_on(pos.vertex_b)
+            self.play_tab.sync_position()
 
     def redo(self) -> None:
         pos = self.state.redo()
@@ -549,6 +587,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Redo")
             self.play_tab.view_a.centre_on(pos.vertex_a)
             self.play_tab.view_b.centre_on(pos.vertex_b)
+            self.play_tab.sync_position()
 
 
 def load_default_state() -> GameState:
